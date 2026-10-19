@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenVerse.Battle (battle relay, reads decks from Redis)
+After=network-online.target redis-server.service
+Wants=network-online.target
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=openverse
+Group=openverse
+WorkingDirectory=/opt/openverse-battle
+ExecStart=/opt/openverse-battle/OpenVerse.Battle
+EnvironmentFile=/etc/openverse/openverse.env
+# 0.0.0.0, not [::]: the seat check compares IPv4 strings and a dual-stack socket would report ::ffff:a.b.c.d
+Environment=ASPNETCORE_URLS=http://0.0.0.0:3001
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

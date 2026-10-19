@@ -1,0 +1,6 @@
+# /etc/caddy/Caddyfile
+# Replace ov.example.com with your DDNS name. Caddy gets and renews the TLS certificate by itself,
+# which needs ports 80 and 443 forwarded to this machine.
+ov.example.com {
+	reverse_proxy 127.0.0.1:5080
+}

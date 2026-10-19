@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenVerseBE (room matching API)
+After=network-online.target redis-server.service
+Wants=network-online.target
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=openverse
+Group=openverse
+WorkingDirectory=/opt/openversebe
+ExecStart=/opt/openversebe/OpenVerseBE
+EnvironmentFile=/etc/openverse/openverse.env
+# Caddy forwards to this. loopback only: nothing outside the machine talks to it directly
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5080
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

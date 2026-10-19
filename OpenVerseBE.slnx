@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OpenVerseBE/OpenVerseBE.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenVerseBE.Tests/OpenVerseBE.Tests.csproj" />
+  </Folder>
+</Solution>
