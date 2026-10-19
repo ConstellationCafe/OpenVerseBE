@@ -128,7 +128,8 @@ cp /어딘가/card_master_full.csv.gz data/
 | `OVBE_CAFE_KEY` | 플레이어가 `cafe_key.txt`에 넣을 값. 비우면 누구나 등록 가능 |
 | `OVBE_ROOM_TTL_MINUTES` | 방 유지 시간(분), 기본 180 |
 | `OVBE_MAX_ROOMS` | 서버 전체에서 동시에 열 수 있는 방 개수, 기본 10. `0`이면 제한 없음 |
-| `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치. PR이 main에 합쳐지면 `main`으로 변경 |
+| `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치 (기본 `main`) |
+| `OVBE_DATA_DIR` | 카드 마스터 폴더. 기본은 저장소의 `data/`. 자동 배포(CD)를 쓰면 저장소 밖으로 지정 |
 | `OVBE_PUBLIC_URL` | 도메인 하나를 WebUI 등과 같이 쓸 때만. 예: `https://example.iptime.org/openverse` |
 
 ### 3. HTTPS: 기존 nginx에 연결 (기본)
@@ -184,6 +185,34 @@ docker compose down                      # 정지 (데이터는 볼륨에 남음
 좌석 판정에 플레이어의 공인 IP가 쓰이므로, 이 IP가 프록시 주소로 찍히면 안 됩니다.
 OpenVerseBE는 도커 게이트웨이(172.28.0.1, 호스트의 nginx가 들어오는 길)와 Caddy(172.28.0.10)가 보낸 `X-Forwarded-For`만 믿습니다(`OVBE_TRUSTED_PROXIES`). `smoke-test.sh`가 이것도 검사합니다.
 Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨다면 배틀 소켓의 출발지 IP가 바뀔 수 있으니 기본값으로 두세요.
+
+### 자동 배포 (CD)
+
+main에 push(PR 머지)되면 [`.github/workflows/CD.yml`](.github/workflows/CD.yml)이 서버에 배포합니다. WebUI_BE와 같은 방식입니다.
+저장소를 `/home/elaina/dockers/OpenVerseBE/service`로 복사하고, SSH로 `docker compose up -d --build`를 실행한 뒤 `/healthz`를 확인합니다.
+
+이 폴더는 배포 때마다 비워지므로, `.env`와 카드 마스터는 **한 단계 위**에 둡니다.
+
+```
+/home/elaina/dockers/OpenVerseBE/
+├── .env        ← 설정 (OVBE_DATA_DIR 포함)
+├── data/       ← card_master_full.csv.gz
+└── service/    ← CD가 매번 새로 복사 (직접 수정하지 않음)
+```
+
+처음 한 번만 준비합니다. 손으로 띄운 `~/OpenVerseBE`에서 옮기는 경우:
+
+```bash
+mkdir -p /home/elaina/dockers/OpenVerseBE
+cp ~/OpenVerseBE/.env /home/elaina/dockers/OpenVerseBE/.env
+cp -r ~/OpenVerseBE/data /home/elaina/dockers/OpenVerseBE/data
+echo 'OVBE_DATA_DIR=/home/elaina/dockers/OpenVerseBE/data' >> /home/elaina/dockers/OpenVerseBE/.env
+sed -i 's/^OPENVERSE_REF=.*/OPENVERSE_REF=main/' /home/elaina/dockers/OpenVerseBE/.env
+```
+
+compose 프로젝트 이름이 `openverse`로 고정되어 있어서, CD는 지금 떠 있는 컨테이너를 그대로 이어받고 Redis 볼륨(플레이어·viewer_id)도 유지합니다.
+
+GitHub 저장소 Settings → Secrets and variables → Actions에 WebUI_BE와 같은 값으로 `SERVER_HOST`, `SERVER_USER`, `SERVER_PASSWORD`, `SERVER_PORT`를 넣습니다. 조직(Organization) 시크릿으로 이미 공유되어 있다면 따로 넣을 필요는 없습니다. 하나라도 비어 있으면 CD 첫 단계가 어떤 시크릿이 빠졌는지 알려 주고 멈춥니다.
 
 Docker 없이 설치하는 방법은 [deploy/manual/README.md](deploy/manual/README.md)에 있습니다.
 
