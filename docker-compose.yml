@@ -1,0 +1,101 @@
+# OpenVerse central matching on one host:
+#   cp .env.example .env   (fill it in)
+#   mkdir -p data && cp /path/to/card_master_full.csv.gz data/
+#   docker compose up -d --build
+#
+# Published ports: 80 + 443 (Caddy: HTTPS for OpenVerseBE, certificate issued automatically), 3001 (battle socket).
+# Redis and OpenVerseBE are reachable only inside this network.
+
+name: openverse
+
+x-redis-conn: &redis-conn "redis:6379,password=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env},abortConnect=false"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks: [ov]
+
+  be:
+    build: .
+    image: openversebe:local
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      OVBE_REDIS: *redis-conn
+      OVBE_KEY_PREFIX: "ov:"
+      # what players' games are told to open the battle socket to
+      OVBE_NODE_URL: ${OVBE_DOMAIN:?set OVBE_DOMAIN in .env}:3001
+      OVBE_CAFE_KEY: ${OVBE_CAFE_KEY:-}
+      OVBE_ROOM_TTL_MINUTES: ${OVBE_ROOM_TTL_MINUTES:-180}
+      # Caddy's fixed address below: its X-Forwarded-For carries each player's real IP, which the seat check needs
+      OVBE_TRUSTED_PROXIES: 172.28.0.10
+    networks: [ov]
+
+  battle:
+    build:
+      # the battle server lives in the OpenVerse repository
+      context: ${OPENVERSE_GIT:-https://github.com/ConstellationCafe/OpenVerse.git}#${OPENVERSE_REF:-feature/central-matching}
+      dockerfile: src/OpenVerse.Battle/Dockerfile
+    image: openverse-battle:local
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      OPENVERSE_REDIS: *redis-conn
+      OPENVERSE_REDIS_PREFIX: "ov:"
+      OPENVERSE_ENGINE_ROLE: ${OPENVERSE_ENGINE_ROLE:-AnswerBlanks}
+    volumes:
+      # card_master_full.csv.gz from a player's server/data folder
+      - ./data:/app/data:ro
+    ports:
+      - "3001:3001"
+    networks: [ov]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [be]
+    environment:
+      OVBE_DOMAIN: ${OVBE_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      ov:
+        ipv4_address: 172.28.0.10
+
+networks:
+  ov:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  redis-data:
+  caddy-data:
+  caddy-config:

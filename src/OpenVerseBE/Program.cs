@@ -14,17 +14,22 @@ builder.Services.AddSingleton<RoomRepository>();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower);
 
-// Caddy terminates TLS on the same machine and forwards over loopback. The defaults already trust loopback only, so a
-// client cannot spoof X-Forwarded-For when it talks to this port directly
+// Caddy terminates TLS and forwards here. The defaults trust loopback only (Caddy on the same host); under docker
+// compose Caddy is a container with a fixed address, given in OVBE_TRUSTED_PROXIES. Anyone else's X-Forwarded-For is
+// ignored, so a client cannot spoof its address by talking to this port directly
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
-    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto);
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    foreach (var proxy in options.TrustedProxies) o.KnownProxies.Add(proxy);
+});
 
 var app = builder.Build();
 app.UseForwardedHeaders();
 app.MapBeEndpoints();
 
 Console.WriteLine($"OpenVerseBE: redis={options.Redis.Split(',')[0]} prefix={options.KeyPrefix} node={options.NodeServerUrl} " +
-                  $"cafe_key={(options.CafeKey.Length > 0 ? "on" : "off")}");
+                  $"cafe_key={(options.CafeKey.Length > 0 ? "on" : "off")} " +
+                  $"trusted_proxies={(options.TrustedProxies.Length > 0 ? string.Join(",", options.TrustedProxies.Select(p => p.ToString())) : "loopback")}");
 app.Run();
 
 public partial class Program;

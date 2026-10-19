@@ -1,0 +1,4 @@
+# /etc/caddy/Caddyfile for the manual (no Docker) setup. Replace ov.example.com with your DNS name.
+ov.example.com {
+	reverse_proxy 127.0.0.1:5080
+}

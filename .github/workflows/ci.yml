@@ -33,3 +33,27 @@ jobs:
         with:
           name: openversebe-linux-x64
           path: publish
+
+  # The whole docker compose stack, end to end: Redis + OpenVerseBE + the battle server (built from OpenVerse) + Caddy
+  compose-smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: .env for CI
+        run: |
+          cat > .env <<'ENV'
+          OVBE_DOMAIN=localhost
+          REDIS_PASSWORD=ciRedisPass123
+          OVBE_CAFE_KEY=ci-cafe-key
+          OPENVERSE_REF=feature/central-matching
+          ENV
+          mkdir -p data
+      - run: docker compose up -d --build
+      - run: ./deploy/smoke-test.sh --insecure
+      - name: stack status on failure
+        if: failure()
+        run: |
+          docker compose ps
+          for s in be battle caddy redis; do
+            docker compose logs --no-color --tail 40 $s | sed "s/^/::warning title=$s log::/" | head -40
+          done

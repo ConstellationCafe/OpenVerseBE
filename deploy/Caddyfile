@@ -1,6 +1,5 @@
-# /etc/caddy/Caddyfile
-# Replace ov.example.com with your DDNS name. Caddy gets and renews the TLS certificate by itself,
-# which needs ports 80 and 443 forwarded to this machine.
-ov.example.com {
-	reverse_proxy 127.0.0.1:5080
+# Used by docker-compose.yml (mounted at /etc/caddy/Caddyfile). OVBE_DOMAIN comes from .env.
+# Caddy obtains and renews the TLS certificate by itself, which needs ports 80 and 443 reachable from the internet.
+{$OVBE_DOMAIN} {
+	reverse_proxy be:5080
 }

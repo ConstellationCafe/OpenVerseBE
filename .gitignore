@@ -5,3 +5,5 @@ obj/
 .idea/
 *.user
 publish/
+.env
+data/
