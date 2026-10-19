@@ -43,7 +43,10 @@ public sealed class LimitedServer : WebApplicationFactory<Program>
         var req = new HttpRequestMessage(HttpMethod.Post, "/v1/players/register")
         { Content = JsonContent.Create(new { udid = Guid.NewGuid().ToString("N"), name = "p" }) };
         req.Headers.Add("X-OV-Cafe-Key", "cafe-secret");
-        var body = await (await c.SendAsync(req)).Content.ReadFromJsonAsync<JsonElement>();
+        var res = await c.SendAsync(req);
+        var text = await res.Content.ReadAsStringAsync();
+        if (!res.IsSuccessStatusCode) throw new InvalidOperationException($"register {(int)res.StatusCode}: {text}");
+        var body = JsonDocument.Parse(text).RootElement;
         c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", body.GetProperty("token").GetString());
         return c;
     }
