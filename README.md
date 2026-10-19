@@ -74,84 +74,95 @@
 
 > 서버 도메인에 IPv6(AAAA) 레코드를 넣지 마세요. 로컬 Api는 IPv6로, 게임은 IPv4로 접속하면 IP가 달라 보여 판정이 메시지 기준으로만 이뤄집니다.
 
-## 설치 (Ubuntu 22.04)
+## 설치 (Ubuntu 22.04, Docker Compose)
 
-### 1. 패키지
+Redis, OpenVerseBE, 배틀 서버, Caddy(HTTPS)가 컨테이너 4개로 한 번에 뜹니다. 서버에 .NET이나 Redis를 따로 설치할 필요가 없습니다.
+
+```
+           인터넷
+             │
+   ┌─────────┼──────────────── docker compose (openverse) ───────────────┐
+   │   :80 :443                                   :3001                  │
+   │    caddy ──► be (OpenVerseBE) ──► redis ◄── battle (OpenVerse.Battle) │
+   │  172.28.0.10                     (외부 비공개)                        │
+   └──────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Docker 설치
 
 ```bash
 sudo apt update
-sudo apt install -y redis-server debian-keyring debian-archive-keyring apt-transport-https curl git
-
-# Caddy
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install -y caddy
-
-# .NET 10 SDK (빌드용)
-curl -sSL https://dot.net/v1/dotnet-install.sh | sudo bash -s -- --channel 10.0 --install-dir /usr/share/dotnet
-sudo ln -sf /usr/share/dotnet/dotnet /usr/local/bin/dotnet
+sudo apt install -y ca-certificates curl git jq
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker $USER   # 다시 로그인하면 sudo 없이 docker 사용
 ```
 
-### 2. Redis
-
-`/etc/redis/redis.conf`에서 [`deploy/redis-openverse.conf`](deploy/redis-openverse.conf)의 항목을 맞춘 뒤:
+### 2. 설정
 
 ```bash
-sudo systemctl restart redis-server
-redis-cli -a '비밀번호' ping   # PONG
-```
-
-### 3. 빌드와 배치
-
-```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin openverse
-
 git clone https://github.com/ConstellationCafe/OpenVerseBE.git ~/OpenVerseBE
-git clone https://github.com/ConstellationCafe/OpenVerse.git ~/OpenVerse
+cd ~/OpenVerseBE
+cp .env.example .env
+nano .env            # OVBE_DOMAIN, REDIS_PASSWORD, OVBE_CAFE_KEY 수정
 
-dotnet publish ~/OpenVerseBE/src/OpenVerseBE/OpenVerseBE.csproj -c Release -r linux-x64 --self-contained false -o /tmp/ovbe
-dotnet publish ~/OpenVerse/src/OpenVerse.Battle/OpenVerse.Battle.csproj -c Release -r linux-x64 --self-contained false -o /tmp/ovbattle
-
-sudo mkdir -p /opt/openversebe /opt/openverse-battle/data /etc/openverse
-sudo cp -r /tmp/ovbe/. /opt/openversebe/
-sudo cp -r /tmp/ovbattle/. /opt/openverse-battle/
-# 배틀 서버도 카드 마스터가 필요합니다. 플레이어 PC의 server/data 에서 복사하세요
-sudo cp card_master_full.csv.gz /opt/openverse-battle/data/
-sudo chown -R openverse:openverse /opt/openversebe /opt/openverse-battle
+mkdir -p data
+# 배틀 서버가 쓰는 카드 마스터. 플레이어 PC의 OpenVerse server/data 폴더에서 복사
+cp /어딘가/card_master_full.csv.gz data/
 ```
 
-### 4. 설정과 서비스
+`.env` 항목:
+
+| 이름 | 설명 |
+| --- | --- |
+| `OVBE_DOMAIN` | 서버 도메인(DDNS 가능). **A 레코드만** 두고 AAAA(IPv6)는 넣지 않습니다 |
+| `REDIS_PASSWORD` | 영문·숫자만 |
+| `OVBE_CAFE_KEY` | 플레이어가 `cafe_key.txt`에 넣을 값. 비우면 누구나 등록 가능 |
+| `OVBE_ROOM_TTL_MINUTES` | 방 유지 시간(분), 기본 180 |
+| `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치. PR이 main에 합쳐지면 `main`으로 변경 |
+
+### 3. 포트
+
+공유기에서 **80, 443, 3001**을 이 서버로 포트포워딩합니다. 80은 Caddy가 인증서를 받을 때 씁니다.
+ufw를 쓰고 있다면:
 
 ```bash
-sudo cp ~/OpenVerseBE/deploy/openverse.env.example /etc/openverse/openverse.env
-sudo nano /etc/openverse/openverse.env      # 비밀번호, 도메인, 카페 키 수정
-sudo chown root:openverse /etc/openverse/openverse.env && sudo chmod 640 /etc/openverse/openverse.env
-
-sudo cp ~/OpenVerseBE/deploy/systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now openversebe openverse-battle
-
-sudo cp ~/OpenVerseBE/deploy/Caddyfile /etc/caddy/Caddyfile
-sudo nano /etc/caddy/Caddyfile              # 도메인 수정
-sudo systemctl reload caddy
+sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw allow 3001/tcp
 ```
 
-### 5. 방화벽·공유기
+> Docker가 연 포트는 ufw 규칙을 거치지 않고 열립니다. 위 세 개 외에는 compose가 포트를 열지 않으므로 Redis와 OpenVerseBE는 외부에 노출되지 않습니다.
+
+### 4. 실행과 확인
 
 ```bash
-sudo ufw allow 80/tcp     # Caddy 인증서 발급
-sudo ufw allow 443/tcp    # OpenVerseBE
-sudo ufw allow 3001/tcp   # 배틀 WebSocket
+docker compose up -d --build     # 첫 빌드는 몇 분 걸립니다
+docker compose ps                # 4개 모두 running
+./deploy/smoke-test.sh           # 등록 → 방 생성 → 입장 → 덱 → 배틀 소켓까지 확인, 마지막 줄 ALL OK
 ```
 
-공유기에서 80, 443, 3001을 이 서버로 포트포워딩합니다. Redis(6379)와 5080은 열지 않습니다.
+`smoke-test.sh`는 실제 도메인으로 접속해서 확인하므로, 인증서 발급·포트포워딩까지 맞아야 통과합니다.
 
-### 6. 확인
+### 운영
 
 ```bash
-curl https://ov.example.com/healthz          # ok
-journalctl -u openverse-battle -n 20         # "Engine: ..." 줄 확인
+docker compose logs -f be battle         # 로그
+git pull && docker compose up -d --build # 업데이트 (OpenVerse 쪽 변경도 다시 빌드됨)
+docker compose down                      # 정지 (데이터는 볼륨에 남음)
 ```
+
+플레이어 정보(viewer_id)는 `redis-data` 볼륨에 저장되어 재시작해도 유지됩니다.
+
+### 주의: 플레이어 IP가 제대로 기록되는지
+
+좌석 판정에 플레이어의 공인 IP가 쓰이므로, 이 IP가 Caddy 컨테이너 주소(172.28.0.10)로 찍히면 안 됩니다.
+그래서 Caddy는 주소가 고정되어 있고 OpenVerseBE는 그 주소의 `X-Forwarded-For`만 믿습니다(`OVBE_TRUSTED_PROXIES`). `smoke-test.sh`가 이것도 검사합니다.
+Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨다면 배틀 소켓의 출발지 IP가 바뀔 수 있으니 기본값으로 두세요.
+
+Docker 없이 설치하는 방법은 [deploy/manual/README.md](deploy/manual/README.md)에 있습니다.
 
 ## 플레이어 쪽 설정
 
@@ -178,3 +189,4 @@ OVBE_TEST_REDIS=127.0.0.1:6379 dotnet test OpenVerseBE.slnx
 | `OVBE_NODE_URL` | `127.0.0.1:3001` | 클라이언트에 알려줄 배틀 서버 주소 (스킴 없이) |
 | `OVBE_CAFE_KEY` | (없음) | 플레이어 등록용 공유 키 |
 | `OVBE_ROOM_TTL_MINUTES` | `180` | 방 유지 시간 |
+| `OVBE_TRUSTED_PROXIES` | (없음) | `X-Forwarded-For`를 믿을 프록시 IP(쉼표 구분). loopback은 항상 신뢰 |
