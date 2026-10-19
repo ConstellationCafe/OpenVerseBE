@@ -8,7 +8,12 @@ var builder = WebApplication.CreateBuilder(args);
 var options = BeOptions.FromEnvironment();
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(new Keys(options.KeyPrefix));
-builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(options.Redis));
+// Connected once, at startup. Connecting lazily on the first request meant a burst of first requests all blocked on
+// the synchronous connect and failed with ConnectTimeout. AbortOnConnectFail=false keeps retrying in the background
+// instead of failing for good when Redis is briefly unreachable
+var redisConfig = ConfigurationOptions.Parse(options.Redis);
+redisConfig.AbortOnConnectFail = false;
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConfig));
 builder.Services.AddSingleton<PlayerRepository>();
 builder.Services.AddSingleton<RoomRepository>();
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -24,11 +29,14 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 });
 
 var app = builder.Build();
+// resolve now, so the connection is made before the first request (the container still owns and disposes it)
+app.Services.GetRequiredService<IConnectionMultiplexer>();
 app.UseForwardedHeaders();
 app.MapBeEndpoints();
 
 Console.WriteLine($"OpenVerseBE: redis={options.Redis.Split(',')[0]} prefix={options.KeyPrefix} node={options.NodeServerUrl} " +
                   $"cafe_key={(options.CafeKey.Length > 0 ? "on" : "off")} " +
+                  $"max_rooms={(options.MaxRooms > 0 ? options.MaxRooms.ToString() : "unlimited")} " +
                   $"trusted_proxies={(options.TrustedProxies.Length > 0 ? string.Join(",", options.TrustedProxies.Select(p => p.ToString())) : "loopback")}");
 app.Run();
 

@@ -197,7 +197,8 @@ public class RoomFlowTests(BeFixture f) : IClassFixture<BeFixture>
         var first = (await Json200(await owner.PostAsJsonAsync("/v1/rooms", Settings))).GetProperty("room_id").GetString();
         var second = (await Json200(await owner.PostAsJsonAsync("/v1/rooms", Settings))).GetProperty("room_id").GetString();
         Assert.NotEqual(first, second);
-        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync($"/v1/rooms/{first}")).StatusCode);
+        var res = await owner.GetAsync($"/v1/rooms/{first}");
+        Assert.True(res.StatusCode == HttpStatusCode.NotFound, $"{(int)res.StatusCode}: {await res.Content.ReadAsStringAsync()}");
     }
 
     // The deck lands where OpenVerse.Battle reads it, with the seat and source address stamped by the server

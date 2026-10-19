@@ -15,6 +15,10 @@ public static class Endpoints
             return Results.Text("ok");
         });
 
+        // how full the server is, for whoever runs it (no player data)
+        app.MapGet("/v1/status", async (RoomRepository repo, BeOptions options) =>
+            Results.Ok(new { open_rooms = await repo.OpenCount(), max_rooms = options.MaxRooms }));
+
         app.MapPost("/v1/players/register", async (HttpContext ctx, RegisterRequest req, PlayerRepository players, BeOptions options) =>
         {
             if (options.CafeKey.Length > 0 && ctx.Request.Headers["X-OV-Cafe-Key"].ToString() != options.CafeKey)
@@ -32,8 +36,16 @@ public static class Endpoints
         rooms.MapPost("", async (HttpContext ctx, CreateRoomRequest req, RoomRepository repo) =>
         {
             var me = Me(ctx);
-            var room = await repo.Create(me, req);
-            return Results.Ok(room.ToResponse(me.Udid));
+            try
+            {
+                var room = await repo.Create(me, req);
+                return Results.Ok(room.ToResponse(me.Udid));
+            }
+            catch (RoomLimitReachedException)
+            {
+                // the caller's own previous room was closed before counting, so the limit is everyone else's rooms
+                return Results.Json(new ErrorResponse("room_limit"), statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
         });
 
         rooms.MapGet("/mine", async (HttpContext ctx, RoomRepository repo) =>

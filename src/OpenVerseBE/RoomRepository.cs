@@ -5,6 +5,11 @@ namespace OpenVerseBE;
 
 public enum EnterResult { Ok, NotFound, Full, OwnRoom }
 
+public sealed class RoomLimitReachedException(int max) : Exception($"all {max} rooms are in use")
+{
+    public int Max { get; } = max;
+}
+
 public sealed record Room(
     string RoomId,
     string BattleId,
@@ -40,43 +45,72 @@ public sealed class RoomRepository(IConnectionMultiplexer redis, Keys keys, BeOp
         return 1
         """;
 
+    // Counting and creating have to be one step too, or several players opening rooms at the same moment all see a free
+    // slot and the limit is overshot. Expired rooms leave their id in the index (a key's TTL cannot tell the index), so
+    // ids whose room no longer exists are pruned first; the index stays as small as the number of open rooms.
+    // KEYS[1] room, KEYS[2] room index, KEYS[3] owner's user_room
+    // ARGV[1] max rooms (0 = no limit), ARGV[2] room id, ARGV[3] ttl seconds, ARGV[4] room key prefix,
+    // ARGV[5..] room hash field, value, field, value...
+    // returns 1 created, 0 room id already taken, -1 limit reached
+    const string CreateScript = """
+        for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
+          if redis.call('EXISTS', ARGV[4] .. id) == 0 then redis.call('SREM', KEYS[2], id) end
+        end
+        local max = tonumber(ARGV[1])
+        if max > 0 and redis.call('SCARD', KEYS[2]) >= max then return -1 end
+        if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+        local fields = {}
+        for i = 5, #ARGV do fields[#fields + 1] = ARGV[i] end
+        redis.call('HSET', KEYS[1], unpack(fields))
+        redis.call('EXPIRE', KEYS[1], ARGV[3])
+        redis.call('SADD', KEYS[2], ARGV[2])
+        redis.call('SET', KEYS[3], ARGV[2], 'EX', ARGV[3])
+        return 1
+        """;
+
     IDatabase Db => redis.GetDatabase();
 
+    // Throws RoomLimitReachedException when MaxRooms rooms are already open
     public async Task<Room> Create(Player owner, CreateRoomRequest req)
     {
         // the client creates a fresh room each time it opens the room screen; the previous one is abandoned
         await CloseOwnedBy(owner.Udid);
 
         var db = Db;
+        var ttl = (long)options.RoomTtl.TotalSeconds;
         for (var attempt = 0; attempt < 32; attempt++)
         {
             var roomId = Random.Shared.Next(10000, 100000).ToString();
-            var key = keys.Room(roomId);
-            var tran = db.CreateTransaction();
-            tran.AddCondition(Condition.KeyNotExists(key));
-            _ = tran.HashSetAsync(key, new HashEntry[]
+            var args = new List<RedisValue> { options.MaxRooms, roomId, ttl, keys.Room("") };
+            foreach (var (field, value) in new (string, RedisValue)[]
             {
-                new("room_id", roomId),
-                new("battle_id", Guid.NewGuid().ToString("N")),
-                new("node_url", options.NodeServerUrl),
-                new("battle_type", req.BattleType),
-                new("battle_rule", req.BattleRule),
-                new("deck_format", req.DeckFormat),
-                new("two_pick_type", req.TwoPickType),
-                new("can_friend_watch", req.CanFriendWatch ? 1 : 0),
-                new("can_guild_watch", req.CanGuildWatch ? 1 : 0),
-                new("owner_udid", owner.Udid),
-                new("owner_viewer", owner.ViewerId),
-                new("owner_name", owner.Name),
-                new("visitor_udid", ""),
-                new("visitor_viewer", 0),
-                new("visitor_name", ""),
-                new("created_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-            });
-            _ = tran.KeyExpireAsync(key, options.RoomTtl);
-            _ = tran.StringSetAsync(keys.UserRoom(owner.Udid), roomId, options.RoomTtl);
-            if (await tran.ExecuteAsync())
-                return (await Get(roomId))!;
+                ("room_id", roomId),
+                ("battle_id", Guid.NewGuid().ToString("N")),
+                ("node_url", options.NodeServerUrl),
+                ("battle_type", req.BattleType),
+                ("battle_rule", req.BattleRule),
+                ("deck_format", req.DeckFormat),
+                ("two_pick_type", req.TwoPickType),
+                ("can_friend_watch", req.CanFriendWatch ? 1 : 0),
+                ("can_guild_watch", req.CanGuildWatch ? 1 : 0),
+                ("owner_udid", owner.Udid),
+                ("owner_viewer", owner.ViewerId),
+                ("owner_name", owner.Name),
+                ("visitor_udid", ""),
+                ("visitor_viewer", 0),
+                ("visitor_name", ""),
+                ("created_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            })
+            {
+                args.Add(field);
+                args.Add(value);
+            }
+            var r = (int)await db.ScriptEvaluateAsync(CreateScript,
+                new RedisKey[] { keys.Room(roomId), keys.RoomIndex, keys.UserRoom(owner.Udid) },
+                args.ToArray());
+            if (r == -1) throw new RoomLimitReachedException(options.MaxRooms);
+            if (r == 1) return (await Get(roomId))!;
+            // 0: that five-digit id is in use, draw another
         }
         throw new InvalidOperationException("failed to allocate a unique room_id");
     }
@@ -125,6 +159,7 @@ public sealed class RoomRepository(IConnectionMultiplexer redis, Keys keys, BeOp
             keys.BattleDeck(roomId, isOwner: false),
             keys.UserRoom(udid),
         });
+        await db.SetRemoveAsync(keys.RoomIndex, roomId);
         if (mine.Value.Room.VisitorUdid is { Length: > 0 } v) await db.KeyDeleteAsync(keys.UserRoom(v));
     }
 
@@ -166,6 +201,16 @@ public sealed class RoomRepository(IConnectionMultiplexer redis, Keys keys, BeOp
         await db.StringSetAsync(keys.BattleDeck(room.RoomId, isOwner), payload, options.RoomTtl);
         await db.KeyExpireAsync(keys.Room(room.RoomId), options.RoomTtl);
         return true;
+    }
+
+    // Rooms currently open (index entries whose room has expired are not counted)
+    public async Task<int> OpenCount()
+    {
+        var db = Db;
+        var open = 0;
+        foreach (var id in await db.SetMembersAsync(keys.RoomIndex))
+            if (await db.KeyExistsAsync(keys.Room(id.ToString()))) open++;
+        return open;
     }
 
     public async Task<Room?> Get(string roomId)

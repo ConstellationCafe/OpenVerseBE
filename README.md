@@ -29,7 +29,7 @@
 | Method / Path | 대응하는 클라이언트 요청 | 응답 |
 | --- | --- | --- |
 | `POST /v1/players/register` | (로컬 Api가 처음 방 기능을 쓸 때) | `viewer_id`, `token` |
-| `POST /v1/rooms` | `open_room/create_room` | 방 정보 |
+| `POST /v1/rooms` | `open_room/create_room` | 방 정보 / 503 `room_limit` (방 개수 한도) |
 | `GET /v1/rooms/mine` | `open_room_battle/do_matching` | 내가 있는 방, `is_owner` |
 | `DELETE /v1/rooms/mine` | `close_room`, `force_release_room` | 204 (방장만 삭제) |
 | `PUT /v1/rooms/mine/deck` | `do_matching` 시점의 덱 확정 | 204 |
@@ -37,6 +37,7 @@
 | `POST /v1/rooms/{id}/enter` | `open_room/enter_room` | 방 정보 / 404 없음 / 409 꽉 참 |
 | `POST /v1/rooms/{id}/leave` | `open_room/leave_room` | 204 |
 | `GET /healthz` | | `ok` |
+| `GET /v1/status` | | `open_rooms`, `max_rooms` (인증 불필요) |
 
 `register`는 `OVBE_CAFE_KEY`가 설정되어 있으면 `X-OV-Cafe-Key` 헤더가 같아야 합니다.
 
@@ -61,6 +62,7 @@
 | `ov:player:{udid}` | Hash | `viewer_id`, `name`, `token_hash`, `last_seen` | 없음 |
 | `ov:token:{sha256}` | String | 토큰 → udid | 30일 |
 | `ov:room:{room_id}` | Hash | 방 설정, 방장/게스트 udid·viewer_id·이름, `node_url` | 3시간 |
+| `ov:rooms` | Set | 열려 있는 room_id 목록. 방 개수 한도 계산용 (만료된 방은 다음 방 생성 때 정리) | 없음 |
 | `ov:user_room:{udid}` | String | 플레이어가 있는 room_id | 3시간 |
 | `ov:bdeck:{room_id}:{owner\|visitor}` | String (JSON) | 대전 덱. 배틀 서버가 읽음 | 3시간 |
 
@@ -125,6 +127,7 @@ cp /어딘가/card_master_full.csv.gz data/
 | `REDIS_PASSWORD` | 영문·숫자만 |
 | `OVBE_CAFE_KEY` | 플레이어가 `cafe_key.txt`에 넣을 값. 비우면 누구나 등록 가능 |
 | `OVBE_ROOM_TTL_MINUTES` | 방 유지 시간(분), 기본 180 |
+| `OVBE_MAX_ROOMS` | 서버 전체에서 동시에 열 수 있는 방 개수, 기본 10. `0`이면 제한 없음 |
 | `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치. PR이 main에 합쳐지면 `main`으로 변경 |
 | `OVBE_PUBLIC_URL` | 도메인 하나를 WebUI 등과 같이 쓸 때만. 예: `https://example.iptime.org/openverse` |
 
@@ -209,4 +212,5 @@ OVBE_TEST_REDIS=127.0.0.1:6379 dotnet test OpenVerseBE.slnx
 | `OVBE_NODE_URL` | `127.0.0.1:3001` | 클라이언트에 알려줄 배틀 서버 주소 (스킴 없이) |
 | `OVBE_CAFE_KEY` | (없음) | 플레이어 등록용 공유 키 |
 | `OVBE_ROOM_TTL_MINUTES` | `180` | 방 유지 시간 |
+| `OVBE_MAX_ROOMS` | `0` (compose는 `10`) | 동시에 열 수 있는 방 개수. `0`이면 제한 없음 |
 | `OVBE_TRUSTED_PROXIES` | (없음) | `X-Forwarded-For`를 믿을 프록시 IP(쉼표 구분). loopback은 항상 신뢰 |
