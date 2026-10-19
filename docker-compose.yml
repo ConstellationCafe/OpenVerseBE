@@ -49,6 +49,7 @@ services:
       OVBE_NODE_URL: ${OVBE_DOMAIN:?set OVBE_DOMAIN in .env}:3001
       OVBE_CAFE_KEY: ${OVBE_CAFE_KEY:-}
       OVBE_ROOM_TTL_MINUTES: ${OVBE_ROOM_TTL_MINUTES:-180}
+      OVBE_MAX_ROOMS: ${OVBE_MAX_ROOMS:-10}
       # X-Forwarded-For carries each player's real IP, which the seat check needs. Believed only from Caddy's fixed
       # address and from the network gateway, which is how the host's own nginx reaches the loopback-only port below
       OVBE_TRUSTED_PROXIES: 172.28.0.10,172.28.0.1

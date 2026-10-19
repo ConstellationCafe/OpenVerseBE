@@ -26,6 +26,9 @@ for i in $(seq 1 60); do
   sleep 2
 done
 ok "healthz"
+STATUS=$("${CURL[@]}" "${BASE}/v1/status")
+jq -e '.max_rooms != null' <<<"$STATUS" >/dev/null || fail "status: $STATUS"
+ok "status: $(jq -r '"open rooms \(.open_rooms), limit \(if .max_rooms == 0 then "none" else .max_rooms end)"' <<<"$STATUS")"
 
 register() {
   "${CURL[@]}" -X POST "${BASE}/v1/players/register" -H 'Content-Type: application/json' \

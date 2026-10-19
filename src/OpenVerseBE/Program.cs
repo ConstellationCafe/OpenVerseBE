@@ -29,6 +29,7 @@ app.MapBeEndpoints();
 
 Console.WriteLine($"OpenVerseBE: redis={options.Redis.Split(',')[0]} prefix={options.KeyPrefix} node={options.NodeServerUrl} " +
                   $"cafe_key={(options.CafeKey.Length > 0 ? "on" : "off")} " +
+                  $"max_rooms={(options.MaxRooms > 0 ? options.MaxRooms.ToString() : "unlimited")} " +
                   $"trusted_proxies={(options.TrustedProxies.Length > 0 ? string.Join(",", options.TrustedProxies.Select(p => p.ToString())) : "loopback")}");
 app.Run();
 

@@ -8,6 +8,8 @@ public sealed class Keys(string prefix)
     public string Player(string udid) => $"{prefix}player:{udid}";
     public string Token(string tokenHash) => $"{prefix}token:{tokenHash}";
     public string Room(string roomId) => $"{prefix}room:{roomId}";
+    // every room id that has been opened and not closed; expired ones are pruned when the next room is created
+    public string RoomIndex => $"{prefix}rooms";
     public string UserRoom(string udid) => $"{prefix}user_room:{udid}";
     public string BattleDeck(string roomId, bool isOwner) => $"{prefix}bdeck:{roomId}:{(isOwner ? "owner" : "visitor")}";
 }
