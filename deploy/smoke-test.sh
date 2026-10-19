@@ -6,12 +6,14 @@
 # Run it on the server from the repository folder, after `docker compose up -d`:
 #   ./deploy/smoke-test.sh                      # reads OVBE_DOMAIN / OVBE_CAFE_KEY / REDIS_PASSWORD from .env
 #   ./deploy/smoke-test.sh --insecure           # self-signed / local certificate (CI uses this with localhost)
+# OVBE_PUBLIC_URL overrides the address players use (be_url.txt), e.g. https://example.iptime.org/openverse
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 [ -f .env ] && set -a && . ./.env && set +a
 DOMAIN="${OVBE_DOMAIN:?OVBE_DOMAIN not set}"
-BASE="https://${DOMAIN}"
+BASE="${OVBE_PUBLIC_URL:-https://${DOMAIN}}"
+BASE="${BASE%/}"
 CURL=(curl -sS --max-time 10)
 [ "${1:-}" = "--insecure" ] && CURL+=(-k)
 fail() { echo "::error title=smoke::$*"; echo "FAIL: $*" >&2; exit 1; }
@@ -56,6 +58,10 @@ DECK=$(docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-w
 IP=$(jq -r .source_ip <<<"$DECK" 2>/dev/null || true)
 [ -n "$IP" ] && [ "$IP" != null ] || fail "deck not in redis or no source_ip: $DECK"
 [ "$IP" != "172.28.0.10" ] || fail "source_ip is Caddy's address: X-Forwarded-For is not trusted (OVBE_TRUSTED_PROXIES)"
+# behind the host's own proxy, the gateway is what OpenVerseBE sees when that proxy does not pass the player's address
+if ! docker compose ps --status running --services 2>/dev/null | grep -qx caddy; then
+  [ "$IP" != "172.28.0.1" ] || fail "source_ip is the docker gateway: the proxy in front is not sending X-Forwarded-For (see deploy/nginx)"
+fi
 ok "deck stored for the battle server, source_ip=$IP"
 
 ws() {

@@ -1,10 +1,12 @@
 # OpenVerse central matching on one host:
 #   cp .env.example .env   (fill it in)
 #   mkdir -p data && cp /path/to/card_master_full.csv.gz data/
-#   docker compose up -d --build
 #
-# Published ports: 80 + 443 (Caddy: HTTPS for OpenVerseBE, certificate issued automatically), 3001 (battle socket).
-# Redis and OpenVerseBE are reachable only inside this network.
+#   docker compose up -d --build                    # behind an nginx (or other proxy) already on this host
+#   docker compose --profile caddy up -d --build    # nothing on 80/443 yet: bundled Caddy does HTTPS
+#
+# Published ports: 3001 (battle socket) and 127.0.0.1:5080 (OpenVerseBE, for the host's own proxy only).
+# With the caddy profile also 80 + 443. Redis is reachable only inside this network.
 
 name: openverse
 
@@ -47,8 +49,12 @@ services:
       OVBE_NODE_URL: ${OVBE_DOMAIN:?set OVBE_DOMAIN in .env}:3001
       OVBE_CAFE_KEY: ${OVBE_CAFE_KEY:-}
       OVBE_ROOM_TTL_MINUTES: ${OVBE_ROOM_TTL_MINUTES:-180}
-      # Caddy's fixed address below: its X-Forwarded-For carries each player's real IP, which the seat check needs
-      OVBE_TRUSTED_PROXIES: 172.28.0.10
+      # X-Forwarded-For carries each player's real IP, which the seat check needs. Believed only from Caddy's fixed
+      # address and from the network gateway, which is how the host's own nginx reaches the loopback-only port below
+      OVBE_TRUSTED_PROXIES: 172.28.0.10,172.28.0.1
+    ports:
+      # loopback only: the host's nginx proxies to it, nothing outside the machine can reach it
+      - "127.0.0.1:${OVBE_HOST_PORT:-5080}:5080"
     networks: [ov]
 
   battle:
@@ -72,8 +78,10 @@ services:
       - "3001:3001"
     networks: [ov]
 
+  # only with --profile caddy: for a host with nothing on ports 80/443 yet
   caddy:
     image: caddy:2
+    profiles: [caddy]
     restart: unless-stopped
     depends_on: [be]
     environment:
@@ -93,7 +101,9 @@ networks:
   ov:
     ipam:
       config:
+        # fixed so the trusted proxy addresses above (Caddy .10, gateway .1) hold
         - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
 
 volumes:
   redis-data:

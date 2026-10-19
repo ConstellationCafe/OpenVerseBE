@@ -48,12 +48,63 @@ jobs:
           OPENVERSE_REF=feature/central-matching
           ENV
           mkdir -p data
-      - run: docker compose up -d --build
+      - run: docker compose --profile caddy up -d --build
       - run: ./deploy/smoke-test.sh --insecure
       - name: stack status on failure
         if: failure()
         run: |
           docker compose ps
           for s in be battle caddy redis; do
+            docker compose logs --no-color --tail 40 $s | sed "s/^/::warning title=$s log::/" | head -40
+          done
+
+  # Behind the host's own nginx instead of Caddy, using the configs players are told to install (deploy/nginx)
+  compose-nginx:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: .env for CI
+        run: |
+          cat > .env <<'ENV'
+          OVBE_DOMAIN=localhost
+          REDIS_PASSWORD=ciRedisPass123
+          OVBE_CAFE_KEY=ci-cafe-key
+          OPENVERSE_REF=feature/central-matching
+          ENV
+          mkdir -p data
+      - name: nginx with both deploy/nginx configs
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nginx ssl-cert
+          sudo rm -f /etc/nginx/sites-enabled/default
+          # a shared domain over HTTPS (like a WebUI already on the host), OpenVerseBE under /openverse/
+          sudo cp deploy/nginx/openverse-path.conf /etc/nginx/snippets/openverse-path.conf
+          sudo tee /etc/nginx/sites-enabled/webui >/dev/null <<'NGX'
+          server {
+              listen 443 ssl;
+              server_name localhost;
+              ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+              ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+              location / { return 200 "webui\n"; }
+              include /etc/nginx/snippets/openverse-path.conf;
+          }
+          NGX
+          # a domain of its own, as shipped, just pointed at localhost
+          sed 's/server_name ov.example.com;/server_name localhost;/' deploy/nginx/openverse-subdomain.conf \
+            | sudo tee /etc/nginx/sites-enabled/openverse >/dev/null
+          sudo nginx -t
+          sudo systemctl restart nginx
+      - run: docker compose up -d --build
+      - name: smoke through the shared-domain path
+        run: OVBE_PUBLIC_URL=https://localhost/openverse ./deploy/smoke-test.sh --insecure
+      - name: the WebUI on the same domain is untouched
+        run: test "$(curl -sk https://localhost/)" = "webui"
+      - name: smoke through the domain-of-its-own config
+        run: OVBE_PUBLIC_URL=http://localhost ./deploy/smoke-test.sh
+      - name: stack status on failure
+        if: failure()
+        run: |
+          docker compose ps
+          sudo tail -20 /var/log/nginx/error.log | sed "s/^/::warning title=nginx::/"
+          for s in be battle; do
             docker compose logs --no-color --tail 40 $s | sed "s/^/::warning title=$s log::/" | head -40
           done

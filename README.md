@@ -76,16 +76,18 @@
 
 ## 설치 (Ubuntu 22.04, Docker Compose)
 
-Redis, OpenVerseBE, 배틀 서버, Caddy(HTTPS)가 컨테이너 4개로 한 번에 뜹니다. 서버에 .NET이나 Redis를 따로 설치할 필요가 없습니다.
+Redis, OpenVerseBE, 배틀 서버가 컨테이너로 한 번에 뜹니다. 서버에 .NET이나 Redis를 따로 설치할 필요가 없습니다.
+HTTPS는 **서버에 이미 있는 nginx**가 맡거나(기본), 80/443이 비어 있으면 함께 들어 있는 Caddy를 씁니다.
 
 ```
-           인터넷
-             │
-   ┌─────────┼──────────────── docker compose (openverse) ───────────────┐
-   │   :80 :443                                   :3001                  │
-   │    caddy ──► be (OpenVerseBE) ──► redis ◄── battle (OpenVerse.Battle) │
-   │  172.28.0.10                     (외부 비공개)                        │
-   └──────────────────────────────────────────────────────────────────────┘
+              인터넷
+     :443 (기존 nginx)            :3001
+          │                          │
+   ┌──────┼──── docker compose (openverse) ─────┼──────────┐
+   │      ▼ 127.0.0.1:5080                      ▼          │
+   │   be (OpenVerseBE) ──► redis ◄── battle (OpenVerse.Battle)
+   │                     (외부 비공개)                       │
+   └─────────────────────────────────────────────────────────┘
 ```
 
 ### 1. Docker 설치
@@ -124,27 +126,45 @@ cp /어딘가/card_master_full.csv.gz data/
 | `OVBE_CAFE_KEY` | 플레이어가 `cafe_key.txt`에 넣을 값. 비우면 누구나 등록 가능 |
 | `OVBE_ROOM_TTL_MINUTES` | 방 유지 시간(분), 기본 180 |
 | `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치. PR이 main에 합쳐지면 `main`으로 변경 |
+| `OVBE_PUBLIC_URL` | 도메인 하나를 WebUI 등과 같이 쓸 때만. 예: `https://example.iptime.org/openverse` |
 
-### 3. 포트
+### 3. HTTPS: 기존 nginx에 연결 (기본)
 
-공유기에서 **80, 443, 3001**을 이 서버로 포트포워딩합니다. 80은 Caddy가 인증서를 받을 때 씁니다.
-ufw를 쓰고 있다면:
+OpenVerseBE는 서버 안에서만 열린 `127.0.0.1:5080`에 뜹니다. nginx가 여기로 넘겨주게 합니다. 둘 중 하나를 고릅니다.
+
+**A. 도메인이 하나뿐이고 이미 WebUI 등이 쓰고 있다** (ipTIME DDNS 등): 하위 경로 `/openverse/`로 붙입니다.
+
+1. 기존 사이트 설정(`/etc/nginx/sites-available/...`)의 **HTTPS `server { }` 블록 안에** [`deploy/nginx/openverse-path.conf`](deploy/nginx/openverse-path.conf)의 `location /openverse/ { ... }` 부분을 붙여 넣습니다.
+2. `sudo nginx -t && sudo systemctl reload nginx`
+3. `.env`에 `OVBE_PUBLIC_URL=https://도메인/openverse`를 추가합니다.
+4. 플레이어의 `be_url.txt`: `https://도메인/openverse`
+
+**B. OpenVerse 전용 도메인(서브도메인)이 있다**: [`deploy/nginx/openverse-subdomain.conf`](deploy/nginx/openverse-subdomain.conf) 파일 맨 위 주석대로 사이트를 추가하고 `certbot --nginx`로 HTTPS를 붙입니다. 플레이어의 `be_url.txt`: `https://그도메인`
+
+어느 쪽이든 nginx 설정의 `proxy_set_header X-Forwarded-For $remote_addr;` 줄은 빼면 안 됩니다. 플레이어의 실제 IP가 이 줄로 전달되고, 배틀 서버는 그 IP로 방장과 게스트를 구분합니다.
+
+> 80/443을 쓰는 프로그램이 없는 서버라면 nginx 대신 `docker compose --profile caddy up -d --build`로 띄웁니다. 함께 들어 있는 Caddy가 `OVBE_DOMAIN`으로 인증서를 자동으로 받습니다.
+
+### 4. 포트
+
+공유기에서 **3001**(배틀)을 이 서버로 포트포워딩합니다. 443(그리고 인증서 발급용 80)은 nginx가 이미 쓰고 있다면 포워딩되어 있을 것입니다.
 
 ```bash
-sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw allow 3001/tcp
+sudo ufw allow 3001/tcp      # ufw를 쓰는 경우
 ```
 
-> Docker가 연 포트는 ufw 규칙을 거치지 않고 열립니다. 위 세 개 외에는 compose가 포트를 열지 않으므로 Redis와 OpenVerseBE는 외부에 노출되지 않습니다.
+> Docker가 연 포트는 ufw 규칙을 거치지 않고 열립니다. compose가 외부에 여는 포트는 3001뿐이고(Caddy를 쓰면 80/443 추가), OpenVerseBE는 127.0.0.1에만 열립니다.
 
-### 4. 실행과 확인
+### 5. 실행과 확인
 
 ```bash
 docker compose up -d --build     # 첫 빌드는 몇 분 걸립니다
-docker compose ps                # 4개 모두 running
+docker compose ps                # redis, be, battle 이 running
 ./deploy/smoke-test.sh           # 등록 → 방 생성 → 입장 → 덱 → 배틀 소켓까지 확인, 마지막 줄 ALL OK
 ```
 
-`smoke-test.sh`는 실제 도메인으로 접속해서 확인하므로, 인증서 발급·포트포워딩까지 맞아야 통과합니다.
+`smoke-test.sh`는 플레이어와 같은 주소(`OVBE_PUBLIC_URL` 또는 `https://OVBE_DOMAIN`)로 접속해서 확인하므로, nginx·인증서·포트포워딩까지 맞아야 통과합니다.
+nginx가 플레이어 IP를 넘기지 않으면 "source_ip is the docker gateway"로 실패합니다.
 
 ### 운영
 
@@ -158,8 +178,8 @@ docker compose down                      # 정지 (데이터는 볼륨에 남음
 
 ### 주의: 플레이어 IP가 제대로 기록되는지
 
-좌석 판정에 플레이어의 공인 IP가 쓰이므로, 이 IP가 Caddy 컨테이너 주소(172.28.0.10)로 찍히면 안 됩니다.
-그래서 Caddy는 주소가 고정되어 있고 OpenVerseBE는 그 주소의 `X-Forwarded-For`만 믿습니다(`OVBE_TRUSTED_PROXIES`). `smoke-test.sh`가 이것도 검사합니다.
+좌석 판정에 플레이어의 공인 IP가 쓰이므로, 이 IP가 프록시 주소로 찍히면 안 됩니다.
+OpenVerseBE는 도커 게이트웨이(172.28.0.1, 호스트의 nginx가 들어오는 길)와 Caddy(172.28.0.10)가 보낸 `X-Forwarded-For`만 믿습니다(`OVBE_TRUSTED_PROXIES`). `smoke-test.sh`가 이것도 검사합니다.
 Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨다면 배틀 소켓의 출발지 IP가 바뀔 수 있으니 기본값으로 두세요.
 
 Docker 없이 설치하는 방법은 [deploy/manual/README.md](deploy/manual/README.md)에 있습니다.
@@ -168,7 +188,7 @@ Docker 없이 설치하는 방법은 [deploy/manual/README.md](deploy/manual/REA
 
 `openverse-launcher.exe` 옆에 두 파일을 둡니다.
 
-- `be_url.txt`: `https://ov.example.com`
+- `be_url.txt`: `https://ov.example.com` (도메인을 WebUI와 같이 쓰면 `https://도메인/openverse`)
 - `cafe_key.txt`: 서버의 `OVBE_CAFE_KEY`와 같은 값
 
 이 파일이 있으면 런처는 로컬 배틀 서버를 띄우지 않고 방 매칭을 이 서버로 보냅니다.
