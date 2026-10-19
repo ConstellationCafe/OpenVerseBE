@@ -1,0 +1,87 @@
+name: OpenVerseBE_CD
+
+# Same shape as WebUI_BE's CD: on every push to main, copy the repository to the server and rebuild the compose stack.
+# Uses the same SERVER_* secrets. The stack's own settings are NOT secrets here: they live in
+# /home/elaina/dockers/OpenVerseBE/.env on the server, next to the card master, outside the folder this replaces.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openverse-be-production
+  cancel-in-progress: false
+
+env:
+  DEPLOY_BASE: /home/elaina/dockers/OpenVerseBE
+
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check the deploy secrets are set
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          missing=""
+          for s in SERVER_HOST SERVER_USER SERVER_PASSWORD SERVER_PORT; do [ -n "${!s}" ] || missing="$missing $s"; done
+          if [ -n "$missing" ]; then
+            echo "::error title=CD::missing secrets:$missing. Add them under Settings > Secrets and variables > Actions (same values as WebUI_BE)."
+            exit 1
+          fi
+
+      - name: Checkout Github Repository
+        uses: actions/checkout@v4
+
+      - name: Copy project to Remote Server (SCP)
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          source: "./*"
+          target: "${{ env.DEPLOY_BASE }}/service"
+          rm: true
+
+      - name: Deploy with docker compose (SSH)
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          DEPLOY_BASE: ${{ env.DEPLOY_BASE }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          script_stop: true
+          command_timeout: 30m
+          envs: DEPLOY_BASE
+          script: |
+            set -euo pipefail
+            ENV_FILE="$DEPLOY_BASE/.env"
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "missing $ENV_FILE: copy .env.example there and fill it in (see README, 자동 배포)"; exit 1
+            fi
+            if ! grep -q '^OVBE_DATA_DIR=' "$ENV_FILE"; then
+              echo "OVBE_DATA_DIR is not set in $ENV_FILE: the card master folder must live outside $DEPLOY_BASE/service"; exit 1
+            fi
+            cd "$DEPLOY_BASE/service"
+            # the project name is fixed in docker-compose.yml (openverse), so this takes over the running stack and
+            # keeps its Redis volume (players, viewer ids)
+            docker compose --env-file "$ENV_FILE" config --quiet
+            docker compose --env-file "$ENV_FILE" up -d --build --remove-orphans
+            docker compose --env-file "$ENV_FILE" ps
+            for i in $(seq 1 30); do
+              if [ "$(curl -s http://127.0.0.1:5080/healthz || true)" = "ok" ]; then echo "healthz ok"; exit 0; fi
+              sleep 2
+            done
+            echo "OpenVerseBE did not answer /healthz after the deploy"
+            docker compose --env-file "$ENV_FILE" logs --tail 50 be
+            exit 1
