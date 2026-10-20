@@ -174,7 +174,7 @@ public sealed class AssetTests : IDisposable
         File.AppendAllText(Path.Combine(Assets, "manifest", "card_assetmanifest"),
             "\nbig_bundle,44444444444444444444444444444444,card,1,44444444444444444444444444444444,1");
 
-        // 2 Mbit/s = 250 KB/s, so 256 KiB takes about a second
+        // 2 Mbit/s = 250 KB/s
         await using var server = new AssetServer(Assets, stateDir: State, rateMbps: 2);
         var c = server.Client();
         await server.WaitReady(c);
@@ -182,7 +182,8 @@ public sealed class AssetTests : IDisposable
         var got = await c.GetByteArrayAsync($"/v1/assets/files/{Md5(big)}");
         sw.Stop();
         Assert.Equal(big, got);
-        Assert.InRange(sw.Elapsed.TotalSeconds, 0.8, 5);
+        // four 64 KiB chunks: the first goes at once, the other three wait their slice (3 x 65536 / 250000 = 0.79 s)
+        Assert.InRange(sw.Elapsed.TotalSeconds, 0.75, 5);
     }
 
     [Fact]
