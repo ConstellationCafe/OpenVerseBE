@@ -216,7 +216,18 @@ Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨�
 ### 자동 배포 (CD)
 
 main에 push(PR 머지)되면 [`.github/workflows/CD.yml`](.github/workflows/CD.yml)이 서버에 배포합니다. WebUI_BE와 같은 방식입니다.
-저장소를 `/home/elaina/dockers/OpenVerseBE/service`로 복사하고, SSH로 `docker compose up -d --build`를 실행한 뒤 `/healthz`를 확인합니다.
+저장소를 `/home/elaina/dockers/OpenVerseBE/service`로 복사하고, SSH로 **OpenVerseBE(`be`)만** 다시 빌드·재시작한 뒤 `/healthz`를 확인합니다.
+
+- **Redis와 배틀 서버는 재시작하지 않습니다.** 진행 중인 대전과 열린 방은 그대로 유지됩니다. 꺼져 있을 때만 켭니다.
+- BE는 1~2초 내려갑니다. 그 순간 방을 만들거나 들어가던 사람은 "다시 시도" 안내 창을 한 번 볼 수 있고, 게임 파일 다운로드는 알아서 다시 시도합니다.
+- **배틀 서버를 업데이트**하려면(OpenVerse 쪽이 바뀌었을 때) Actions → OpenVerseBE_CD → **Run workflow**에서 `battle`을 체크하고 실행합니다. 이때는 진행 중인 대전이 끊기니 사람이 없을 때 하세요.
+- 서버에서 직접 할 때도 같은 방식입니다.
+  ```bash
+  cd /home/elaina/dockers/OpenVerseBE/service
+  docker compose --env-file ../.env up -d --build --no-deps be                 # BE만
+  docker compose --env-file ../.env build --pull battle && \
+    docker compose --env-file ../.env up -d --no-deps --force-recreate battle   # 배틀 서버 (대전 끊김)
+  ```
 
 이 폴더는 배포 때마다 비워지므로, `.env`와 카드 마스터는 **한 단계 위**에 둡니다.
 
