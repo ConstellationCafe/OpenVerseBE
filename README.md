@@ -38,8 +38,14 @@
 | `POST /v1/rooms/{id}/leave` | `open_room/leave_room` | 204 |
 | `GET /healthz` | | `ok` |
 | `GET /v1/status` | | `open_rooms`, `max_rooms` (인증 불필요) |
+| `GET /v1/card-master` | (setup·런처가 카드 마스터가 없을 때) | `card_master_full.csv.gz` / 404 |
+| `GET /v1/assets/status` | | 게임 파일 색인 상태 `ready`·`indexing`·`not_configured` |
+| `GET /v1/assets/manifests` | | 서버가 가진 목록 파일 이름 |
+| `GET /v1/assets/manifests/{name}` | `/dl/.../{name}` (로컬 Api가 시작할 때) | 해시를 서버 파일 기준으로 고친 목록 파일 |
+| `GET /v1/assets/files/{md5}` | `/dl/.../{hash}` (내 PC에 없는 파일) | 파일 / 404 |
 
-`register`는 `OVBE_CAFE_KEY`가 설정되어 있으면 `X-OV-Cafe-Key` 헤더가 같아야 합니다.
+`register`, `card-master`, `assets/*`는 `OVBE_CAFE_KEY`가 설정되어 있으면 `X-OV-Cafe-Key` 헤더가 같아야 합니다.
+`assets/*`는 색인이 끝나기 전에는 503 `assets_indexing`, 게임 파일 폴더가 없으면 404 `assets_not_configured`입니다.
 
 ### 방 정보 예시
 
@@ -129,7 +135,8 @@ cp /어딘가/card_master_full.csv.gz data/
 | `OVBE_ROOM_TTL_MINUTES` | 방 유지 시간(분), 기본 180 |
 | `OVBE_MAX_ROOMS` | 서버 전체에서 동시에 열 수 있는 방 개수, 기본 10. `0`이면 제한 없음 |
 | `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치 (기본 `main`) |
-| `OVBE_DATA_DIR` | 카드 마스터 폴더. 기본은 저장소의 `data/`. 자동 배포(CD)를 쓰면 저장소 밖으로 지정 |
+| `OVBE_DATA_DIR` | 카드 마스터 폴더. 기본은 저장소의 `data/`. 자동 배포(CD)를 쓰면 저장소 밖으로 지정. 카드 마스터가 없는 플레이어에게도 이 파일을 내려줌 |
+| `OVBE_ASSET_DIR` | (선택) 셰도우버스 데이터 폴더 복사본. 데이터가 없는 플레이어에게 없는 파일을 내려줌. 아래 "게임 데이터·카드 마스터 내려주기" |
 | `OVBE_PUBLIC_URL` | 도메인 하나를 WebUI 등과 같이 쓸 때만. 예: `https://example.iptime.org/openverse` |
 
 ### 3. HTTPS: 기존 nginx에 연결 (기본)
@@ -185,6 +192,26 @@ docker compose down                      # 정지 (데이터는 볼륨에 남음
 좌석 판정에 플레이어의 공인 IP가 쓰이므로, 이 IP가 프록시 주소로 찍히면 안 됩니다.
 OpenVerseBE는 도커 게이트웨이(172.28.0.1, 호스트의 nginx가 들어오는 길)와 Caddy(172.28.0.10)가 보낸 `X-Forwarded-For`만 믿습니다(`OVBE_TRUSTED_PROXIES`). `smoke-test.sh`가 이것도 검사합니다.
 Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨다면 배틀 소켓의 출발지 IP가 바뀔 수 있으니 기본값으로 두세요.
+
+### 게임 데이터·카드 마스터 내려주기
+
+셰도우버스 데이터(`%UserProfile%\AppData\LocalLow\Cygames\Shadowverse`, 약 13GB)가 없거나 일부만 있는 PC는 OpenVerse가 **없는 파일만** 이 서버에서 받습니다. 카드 마스터가 없는 PC는 setup과 런처가 이 서버에서 받습니다.
+
+1. 섀버를 하던 PC의 `LocalLow\Cygames\Shadowverse` 폴더를 통째로 서버에 복사합니다. (`manifest`, `a`, `b`, `s`, `v`, `m`, `f` 폴더가 있어야 합니다)
+   ```bash
+   # 예: Windows에서 scp (PowerShell)
+   scp -r "$env:USERPROFILE\AppData\LocalLow\Cygames\Shadowverse" elaina@서버:/home/elaina/dockers/OpenVerseBE/shadowverse
+   ```
+   파일은 누구나 읽을 수 있는 권한(기본값)이면 됩니다. 컨테이너에는 읽기 전용으로 붙습니다.
+2. `.env`에 `OVBE_ASSET_DIR=/home/elaina/dockers/OpenVerseBE/shadowverse`를 넣고 다시 띄웁니다. 카드 마스터는 배틀 서버가 쓰는 `OVBE_DATA_DIR`의 `card_master_full.csv.gz`를 그대로 내려줍니다.
+3. 처음 한 번은 13GB의 해시를 계산하느라 몇 분 걸립니다. 끝났는지 확인:
+   ```bash
+   curl -s -H "X-OV-Cafe-Key: 카페키" http://127.0.0.1:5080/v1/assets/status
+   ```
+   `"state":"ready"`면 끝입니다. 계산 결과는 `be-state` 볼륨에 남아 다음 재시작부터는 바뀐 파일만 다시 계산합니다.
+4. **nginx 속도 제한**: [`deploy/nginx/openverse-assets-zones.conf`](deploy/nginx/openverse-assets-zones.conf)를 `/etc/nginx/conf.d/`에 복사하고, [`openverse-path.conf`](deploy/nginx/openverse-path.conf)의 `location /openverse/v1/assets/ { ... }` 블록을 `location /openverse/` 옆에 붙여 넣습니다. 그다음 `sudo nginx -t && sudo systemctl reload nginx`.
+   - 기본값은 연결당 1MB/s, 전체 동시 3개입니다. 게임 파일 다운로드가 최대 약 24Mbps만 쓰므로 업로드 36Mbps 회선에서도 대전과 WebUI가 느려지지 않습니다.
+   - 플레이어 한 명은 최대 2MB/s(OpenVerse가 동시에 2개까지만 요청)로 받으니 13GB 전체는 약 2시간이 걸립니다. 유선으로 바꾸고 업로드를 다시 재면 `limit_rate`와 `ov_assets_total`을 올리세요.
 
 ### 자동 배포 (CD)
 

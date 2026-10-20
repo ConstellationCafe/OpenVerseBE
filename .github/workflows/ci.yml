@@ -46,8 +46,13 @@ jobs:
           REDIS_PASSWORD=ciRedisPass123
           OVBE_CAFE_KEY=ci-cafe-key
           OPENVERSE_REF=main
+          OVBE_ASSET_DIR=./ci-assets
           ENV
           mkdir -p data
+          # a tiny stand-in for a Shadowverse data folder, so the game-file endpoints have something
+          mkdir -p ci-assets/manifest ci-assets/a
+          printf 'card bundle for ci' > ci-assets/a/card_ci
+          printf 'card_ci,00000000000000000000000000000000,card,1,00000000000000000000000000000000,1' > ci-assets/manifest/card_assetmanifest
       - run: docker compose --profile caddy up -d --build
       - run: ./deploy/smoke-test.sh --insecure
       - name: stack status on failure
@@ -70,14 +75,20 @@ jobs:
           REDIS_PASSWORD=ciRedisPass123
           OVBE_CAFE_KEY=ci-cafe-key
           OPENVERSE_REF=main
+          OVBE_ASSET_DIR=./ci-assets
           ENV
           mkdir -p data
+          # a tiny stand-in for a Shadowverse data folder, so the game-file endpoints have something
+          mkdir -p ci-assets/manifest ci-assets/a
+          printf 'card bundle for ci' > ci-assets/a/card_ci
+          printf 'card_ci,00000000000000000000000000000000,card,1,00000000000000000000000000000000,1' > ci-assets/manifest/card_assetmanifest
       - name: nginx with both deploy/nginx configs
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq nginx ssl-cert
           sudo rm -f /etc/nginx/sites-enabled/default
           # a shared domain over HTTPS (like a WebUI already on the host), OpenVerseBE under /openverse/
           sudo cp deploy/nginx/openverse-path.conf /etc/nginx/snippets/openverse-path.conf
+          sudo cp deploy/nginx/openverse-assets-zones.conf /etc/nginx/conf.d/
           sudo tee /etc/nginx/sites-enabled/webui >/dev/null <<'NGX'
           server {
               listen 443 ssl;

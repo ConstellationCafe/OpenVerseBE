@@ -79,5 +79,36 @@ CODE=$(ws 00000); [ "$CODE" = 403 ] || fail "battle socket for unknown room: HTT
 ok "battle socket refused for an unknown room"
 
 "${CURL[@]}" -o /dev/null -X DELETE "${BASE}/v1/rooms/mine" -H "Authorization: Bearer $TA"
-echo "::notice title=smoke::all checks passed (room $ROOM, source_ip $IP)"
 echo "ALL OK"
+
+# Game files and card master for players whose own copy lacks them: only checked when the server has them
+KEY=(-H "X-OV-Cafe-Key: ${OVBE_CAFE_KEY:-}")
+CODE=$("${CURL[@]}" -o /dev/null -w '%{http_code}' "${KEY[@]}" "${BASE}/v1/card-master")
+case "$CODE" in
+  200) ok "card master served" ;;
+  404) echo "--  no card master to serve (put card_master_full.csv.gz in OVBE_DATA_DIR)" ;;
+  *) fail "card master: HTTP $CODE" ;;
+esac
+for i in $(seq 1 150); do
+  ASTATUS=$("${CURL[@]}" "${KEY[@]}" "${BASE}/v1/assets/status")
+  STATE=$(jq -r .state <<<"$ASTATUS")
+  [ "$STATE" != indexing ] && break
+  [ "$i" = 1 ] && echo "   waiting for the game-file index (minutes on the first start of a full copy)"
+  sleep 2
+done
+case "$STATE" in
+  not_configured) echo "--  no game files to serve (OVBE_ASSET_DIR not set)"; FILES="no game files" ;;
+  ready)
+    ok "game files: $(jq -r '"\(.files) files, \(.mib) MiB, \(.manifests) manifests"' <<<"$ASTATUS")"
+    NAME=$("${CURL[@]}" "${KEY[@]}" "${BASE}/v1/assets/manifests" | jq -r '.manifests[0].name')
+    ROW=$("${CURL[@]}" "${KEY[@]}" "${BASE}/v1/assets/manifests/${NAME}" | awk -F, 'NF>=6 {print; exit}')
+    HASH=$(cut -d, -f2 <<<"$ROW")
+    GOT=$("${CURL[@]}" "${KEY[@]}" "${BASE}/v1/assets/files/${HASH}" | md5sum | cut -d' ' -f1)
+    [ "$GOT" = "$HASH" ] || fail "game file ${HASH} from ${NAME}: got md5 $GOT"
+    ok "game file served by hash through the proxy (${NAME})"
+    FILES="game files ok"
+    ;;
+  *) fail "game files: $ASTATUS" ;;
+esac
+
+echo "::notice title=smoke::all checks passed (room $ROOM, source_ip $IP, ${FILES})"

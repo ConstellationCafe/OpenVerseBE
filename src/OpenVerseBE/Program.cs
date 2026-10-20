@@ -16,6 +16,8 @@ redisConfig.AbortOnConnectFail = false;
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConfig));
 builder.Services.AddSingleton<PlayerRepository>();
 builder.Services.AddSingleton<RoomRepository>();
+builder.Services.AddSingleton<AssetStore>();
+builder.Services.AddHostedService<AssetIndexer>();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower);
 
@@ -37,6 +39,8 @@ app.MapBeEndpoints();
 Console.WriteLine($"OpenVerseBE: redis={options.Redis.Split(',')[0]} prefix={options.KeyPrefix} node={options.NodeServerUrl} " +
                   $"cafe_key={(options.CafeKey.Length > 0 ? "on" : "off")} " +
                   $"max_rooms={(options.MaxRooms > 0 ? options.MaxRooms.ToString() : "unlimited")} " +
+                  $"assets={(options.AssetDir.Length > 0 ? options.AssetDir : "off")} " +
+                  $"card_master={(options.CardMasterPath.Length > 0 && File.Exists(options.CardMasterPath) ? "on" : "off")} " +
                   $"trusted_proxies={(options.TrustedProxies.Length > 0 ? string.Join(",", options.TrustedProxies.Select(p => p.ToString())) : "loopback")}");
 app.Run();
 

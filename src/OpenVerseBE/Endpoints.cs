@@ -19,17 +19,15 @@ public static class Endpoints
         app.MapGet("/v1/status", async (RoomRepository repo, BeOptions options) =>
             Results.Ok(new { open_rooms = await repo.OpenCount(), max_rooms = options.MaxRooms }));
 
-        app.MapPost("/v1/players/register", async (HttpContext ctx, RegisterRequest req, PlayerRepository players, BeOptions options) =>
+        app.MapPost("/v1/players/register", async (RegisterRequest req, PlayerRepository players) =>
         {
-            if (options.CafeKey.Length > 0 && ctx.Request.Headers["X-OV-Cafe-Key"].ToString() != options.CafeKey)
-                return Results.Json(new ErrorResponse("bad_cafe_key"), statusCode: StatusCodes.Status403Forbidden);
             if (string.IsNullOrWhiteSpace(req.Udid))
                 return Results.BadRequest(new ErrorResponse("udid_required"));
             var name = string.IsNullOrWhiteSpace(req.Name) ? "player_" + req.Udid[^Math.Min(6, req.Udid.Length)..] : req.Name.Trim();
             if (name.Length > 24) name = name[..24];
             var (player, token) = await players.Register(req.Udid, name);
             return Results.Ok(new RegisterResponse(player.ViewerId, token));
-        });
+        }).AddEndpointFilter(RequireCafeKey);
 
         var rooms = app.MapGroup("/v1/rooms").AddEndpointFilter(RequirePlayer);
 
@@ -91,6 +89,80 @@ public static class Endpoints
             await repo.Leave(roomId);
             return Results.NoContent();
         });
+
+        MapAssetEndpoints(app);
+    }
+
+    // Game files and the card master, for players whose own Shadowverse folder lacks them. Their local Api asks for
+    // what it is missing; nginx in front limits the rate (deploy/nginx). Same cafe key as registration
+    static void MapAssetEndpoints(WebApplication app)
+    {
+        app.MapGet("/v1/card-master", (AssetStore store) =>
+                store.CardMaster is { } path
+                    ? Results.File(path, "application/gzip", "card_master_full.csv.gz")
+                    : Results.NotFound(new ErrorResponse("card_master_not_configured")))
+            .AddEndpointFilter(RequireCafeKey);
+
+        var assets = app.MapGroup("/v1/assets").AddEndpointFilter(RequireCafeKey);
+
+        assets.MapGet("/status", (AssetStore store) => Results.Ok(new
+        {
+            state = store.State switch
+            {
+                AssetState.Ready => "ready",
+                AssetState.Indexing => "indexing",
+                AssetState.Failed => "failed",
+                _ => "not_configured",
+            },
+            files = store.Files,
+            mib = store.Bytes / 1048576,
+            manifests = store.Manifests.Count,
+            hashed_this_start = store.Hashed,
+            error = store.Error.Length > 0 ? store.Error : null,
+        }));
+
+        assets.MapGet("/manifests", (AssetStore store) => Results.Ok(new
+        {
+            manifests = store.Manifests
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => new
+                {
+                    name = kv.Key,
+                    size = kv.Value.Length,
+                    // lets a player's OpenVerse keep its copy and fetch only the manifests that changed
+                    md5 = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(kv.Value)).ToLowerInvariant(),
+                }),
+        })).AddEndpointFilter(RequireAssetsReady);
+
+        assets.MapGet("/manifests/{name}", (string name, AssetStore store) =>
+            store.Manifests.TryGetValue(name, out var bytes)
+                ? Results.Bytes(bytes, "application/octet-stream")
+                : Results.NotFound(new ErrorResponse("manifest_not_found"))).AddEndpointFilter(RequireAssetsReady);
+
+        assets.MapGet("/files/{md5}", (string md5, AssetStore store) =>
+            md5.Length == 32 && md5.All(Uri.IsHexDigit) && store.FileFor(md5) is { } path
+                ? Results.File(path, "application/octet-stream", enableRangeProcessing: true)
+                : Results.NotFound(new ErrorResponse("file_not_found"))).AddEndpointFilter(RequireAssetsReady);
+    }
+
+    static async ValueTask<object?> RequireCafeKey(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var options = ctx.HttpContext.RequestServices.GetRequiredService<BeOptions>();
+        if (options.CafeKey.Length > 0 && ctx.HttpContext.Request.Headers["X-OV-Cafe-Key"].ToString() != options.CafeKey)
+            return Results.Json(new ErrorResponse("bad_cafe_key"), statusCode: StatusCodes.Status403Forbidden);
+        return await next(ctx);
+    }
+
+    static async ValueTask<object?> RequireAssetsReady(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var store = ctx.HttpContext.RequestServices.GetRequiredService<AssetStore>();
+        return store.State switch
+        {
+            AssetState.Ready => await next(ctx),
+            AssetState.Indexing => Results.Json(new ErrorResponse("assets_indexing"), statusCode: StatusCodes.Status503ServiceUnavailable),
+            AssetState.Failed => Results.Json(new ErrorResponse("assets_failed"), statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.NotFound(new ErrorResponse("assets_not_configured")),
+        };
     }
 
     static async ValueTask<object?> RequirePlayer(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
