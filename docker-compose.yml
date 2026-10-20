@@ -59,6 +59,11 @@ services:
       OVBE_ASSET_DIR: /app/assets
       OVBE_CARD_MASTER: /app/data/card_master_full.csv.gz
       OVBE_STATE_DIR: /app/state
+      # game-file upload budget (Mbit/s, shared by everyone downloading), how many download at once, and how long an
+      # idle place is kept. See .env.example
+      OVBE_ASSET_RATE_MBPS: ${OVBE_ASSET_RATE_MBPS:-64}
+      OVBE_ASSET_MAX_ACTIVE: ${OVBE_ASSET_MAX_ACTIVE:-2}
+      OVBE_ASSET_IDLE_SECONDS: ${OVBE_ASSET_IDLE_SECONDS:-120}
     volumes:
       # a copy of a player's %UserProfile%\AppData\LocalLow\Cygames\Shadowverse. Left unset, no game files are served
       - ${OVBE_ASSET_DIR:-./assets}:/app/assets:ro

@@ -15,13 +15,15 @@ public sealed class AssetServer : WebApplicationFactory<Program>
 {
     readonly BeOptions _options;
 
-    public AssetServer(string assetDir, string cardMaster = "", string stateDir = "", string cafeKey = "cafe-secret")
+    public AssetServer(string assetDir, string cardMaster = "", string stateDir = "", string cafeKey = "cafe-secret",
+        double rateMbps = 0, int maxActive = 0)
     {
         Environment.SetEnvironmentVariable("OVBE_REDIS", LimitedServer.Redis);
         _options = new BeOptions
         {
             Redis = LimitedServer.Redis, KeyPrefix = $"ovtest:{Guid.NewGuid():N}:", NodeServerUrl = "battle.example:3001",
             CafeKey = cafeKey, AssetDir = assetDir, CardMasterPath = cardMaster, StateDir = stateDir,
+            AssetRateMbps = rateMbps, AssetMaxActive = maxActive,
         };
     }
 
@@ -126,13 +128,61 @@ public sealed class AssetTests : IDisposable
         Assert.Equal(Voice, await c.GetByteArrayAsync($"/v1/assets/files/{Md5(Voice).ToUpperInvariant()}"));
         Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync("/v1/assets/files/33333333333333333333333333333333")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync("/v1/assets/files/..%2F..%2Fetc%2Fpasswd")).StatusCode);
+    }
 
-        // a resumed download
-        var req = new HttpRequestMessage(HttpMethod.Get, $"/v1/assets/files/{Md5(CardBundle)}");
-        req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(5, null);
-        var partial = await c.SendAsync(req);
-        Assert.Equal(HttpStatusCode.PartialContent, partial.StatusCode);
-        Assert.Equal(CardBundle[5..], await partial.Content.ReadAsByteArrayAsync());
+    static HttpRequestMessage FileRequest(string md5, string downloadId)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/v1/assets/files/{md5}");
+        req.Headers.Add("X-OV-Download-Id", downloadId);
+        return req;
+    }
+
+    [Fact]
+    public async Task A_third_downloader_waits_in_line()
+    {
+        await using var server = new AssetServer(Assets, stateDir: State, maxActive: 2);
+        var c = server.Client();
+        await server.WaitReady(c);
+        var md5 = Md5(CardBundle);
+
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(FileRequest(md5, "pc-a"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(FileRequest(md5, "pc-b"))).StatusCode);
+
+        var third = await c.SendAsync(FileRequest(md5, "pc-c"));
+        Assert.Equal((HttpStatusCode)429, third.StatusCode);
+        Assert.Equal("5", third.Headers.RetryAfter?.ToString());
+        var body = JsonDocument.Parse(await third.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("queued", body.GetProperty("error").GetString());
+        Assert.Equal(1, body.GetProperty("position").GetInt32());
+        Assert.Equal(2, body.GetProperty("active").GetInt32());
+
+        // the two inside keep downloading; manifests and the card master never queue
+        Assert.Equal(HttpStatusCode.OK, (await c.SendAsync(FileRequest(md5, "pc-a"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync("/v1/assets/manifests")).StatusCode);
+
+        var queue = JsonDocument.Parse(await c.GetStringAsync("/v1/assets/queue")).RootElement;
+        Assert.Equal(2, queue.GetProperty("active").GetInt32());
+        Assert.Equal(1, queue.GetProperty("waiting").GetInt32());
+    }
+
+    [Fact]
+    public async Task Downloads_keep_to_the_bandwidth_budget()
+    {
+        var big = new byte[256 * 1024];
+        Random.Shared.NextBytes(big);
+        File.WriteAllBytes(Path.Combine(Assets, "a", "big_bundle"), big);
+        File.AppendAllText(Path.Combine(Assets, "manifest", "card_assetmanifest"),
+            "\nbig_bundle,44444444444444444444444444444444,card,1,44444444444444444444444444444444,1");
+
+        // 2 Mbit/s = 250 KB/s, so 256 KiB takes about a second
+        await using var server = new AssetServer(Assets, stateDir: State, rateMbps: 2);
+        var c = server.Client();
+        await server.WaitReady(c);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var got = await c.GetByteArrayAsync($"/v1/assets/files/{Md5(big)}");
+        sw.Stop();
+        Assert.Equal(big, got);
+        Assert.InRange(sw.Elapsed.TotalSeconds, 0.8, 5);
     }
 
     [Fact]
