@@ -3,10 +3,18 @@ name: OpenVerseBE_CD
 # Same shape as WebUI_BE's CD: on every push to main, copy the repository to the server and rebuild the compose stack.
 # Uses the same SERVER_* secrets. The stack's own settings are NOT secrets here: they live in
 # /home/elaina/dockers/OpenVerseBE/.env on the server, next to the card master, outside the folder this replaces.
+# Only OpenVerseBE is rebuilt and restarted: Redis (players, open rooms) and the battle server (games in progress) keep
+# running. Redis or the battle server is started only if it is not running at all. To update the battle server (after
+# OpenVerse changes), run this workflow by hand with "battle" ticked: that restart drops games in progress.
 on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      battle:
+        description: "Also rebuild and restart the battle server (drops games in progress)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,6 +63,7 @@ jobs:
         uses: appleboy/ssh-action@v1.2.5
         env:
           DEPLOY_BASE: ${{ env.DEPLOY_BASE }}
+          UPDATE_BATTLE: ${{ github.event_name == 'workflow_dispatch' && inputs.battle && 'true' || 'false' }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
@@ -62,7 +71,7 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           script_stop: true
           command_timeout: 30m
-          envs: DEPLOY_BASE
+          envs: DEPLOY_BASE,UPDATE_BATTLE
           script: |
             set -euo pipefail
             ENV_FILE="$DEPLOY_BASE/.env"
@@ -75,13 +84,24 @@ jobs:
             cd "$DEPLOY_BASE/service"
             # the project name is fixed in docker-compose.yml (openverse), so this takes over the running stack and
             # keeps its Redis volume (players, viewer ids)
-            docker compose --env-file "$ENV_FILE" config --quiet
-            docker compose --env-file "$ENV_FILE" up -d --build --remove-orphans
-            docker compose --env-file "$ENV_FILE" ps
+            C="docker compose --env-file $ENV_FILE"
+            $C config --quiet
+            # Redis and the battle server: started if missing, never recreated here (that would cut games and rooms)
+            $C up -d --no-recreate redis battle
+            if [ "$UPDATE_BATTLE" = "true" ]; then
+              echo "rebuilding the battle server as asked (games in progress are dropped)"
+              $C build --pull battle
+              $C up -d --no-deps --force-recreate battle
+            fi
+            # OpenVerseBE only: down for a second or two. A room request in that moment gets the "try again" dialog;
+            # game-file downloads retry by themselves
+            $C build be
+            $C up -d --no-deps be
+            $C ps
             for i in $(seq 1 30); do
               if [ "$(curl -s http://127.0.0.1:5080/healthz || true)" = "ok" ]; then echo "healthz ok"; exit 0; fi
               sleep 2
             done
             echo "OpenVerseBE did not answer /healthz after the deploy"
-            docker compose --env-file "$ENV_FILE" logs --tail 50 be
+            $C logs --tail 50 be
             exit 1
