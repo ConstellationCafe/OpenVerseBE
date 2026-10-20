@@ -79,7 +79,6 @@ CODE=$(ws 00000); [ "$CODE" = 403 ] || fail "battle socket for unknown room: HTT
 ok "battle socket refused for an unknown room"
 
 "${CURL[@]}" -o /dev/null -X DELETE "${BASE}/v1/rooms/mine" -H "Authorization: Bearer $TA"
-echo "::notice title=smoke::all checks passed (room $ROOM, source_ip $IP)"
 echo "ALL OK"
 
 # Game files and card master for players whose own copy lacks them: only checked when the server has them
@@ -98,7 +97,7 @@ for i in $(seq 1 150); do
   sleep 2
 done
 case "$STATE" in
-  not_configured) echo "--  no game files to serve (OVBE_ASSET_DIR not set)" ;;
+  not_configured) echo "--  no game files to serve (OVBE_ASSET_DIR not set)"; FILES="no game files" ;;
   ready)
     ok "game files: $(jq -r '"\(.files) files, \(.mib) MiB, \(.manifests) manifests"' <<<"$ASTATUS")"
     NAME=$("${CURL[@]}" "${KEY[@]}" "${BASE}/v1/assets/manifests" | jq -r '.manifests[0].name')
@@ -107,6 +106,9 @@ case "$STATE" in
     GOT=$("${CURL[@]}" "${KEY[@]}" "${BASE}/v1/assets/files/${HASH}" | md5sum | cut -d' ' -f1)
     [ "$GOT" = "$HASH" ] || fail "game file ${HASH} from ${NAME}: got md5 $GOT"
     ok "game file served by hash through the proxy (${NAME})"
+    FILES="game files ok"
     ;;
   *) fail "game files: $ASTATUS" ;;
 esac
+
+echo "::notice title=smoke::all checks passed (room $ROOM, source_ip $IP, ${FILES})"

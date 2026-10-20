@@ -125,7 +125,13 @@ public static class Endpoints
         {
             manifests = store.Manifests
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-                .Select(kv => new { name = kv.Key, size = kv.Value.Length }),
+                .Select(kv => new
+                {
+                    name = kv.Key,
+                    size = kv.Value.Length,
+                    // lets a player's OpenVerse keep its copy and fetch only the manifests that changed
+                    md5 = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(kv.Value)).ToLowerInvariant(),
+                }),
         })).AddEndpointFilter(RequireAssetsReady);
 
         assets.MapGet("/manifests/{name}", (string name, AssetStore store) =>

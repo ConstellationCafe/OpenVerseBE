@@ -102,6 +102,9 @@ public sealed class AssetTests : IDisposable
         Assert.Contains("moviemanifest_kor", names);
 
         var bytes = await c.GetByteArrayAsync("/v1/assets/manifests/card_assetmanifest");
+        var listed = list.EnumerateArray().Single(m => m.GetProperty("name").GetString() == "card_assetmanifest");
+        Assert.Equal(Md5(bytes), listed.GetProperty("md5").GetString());
+        Assert.Equal(bytes.Length, listed.GetProperty("size").GetInt32());
         Assert.False(bytes is [0xEF, 0xBB, 0xBF, ..], "BOM left in");
         var rows = Encoding.UTF8.GetString(bytes).Split('\n');
         Assert.Equal($"card_1001,{Md5(CardBundle)},card,0,{Md5(CardBundle)},0", rows[0]);
