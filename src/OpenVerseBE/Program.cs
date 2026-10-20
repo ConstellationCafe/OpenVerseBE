@@ -17,6 +17,8 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer
 builder.Services.AddSingleton<PlayerRepository>();
 builder.Services.AddSingleton<RoomRepository>();
 builder.Services.AddSingleton<AssetStore>();
+builder.Services.AddSingleton(sp => new DownloadQueue(sp.GetRequiredService<BeOptions>()));
+builder.Services.AddSingleton<DownloadRate>();
 builder.Services.AddHostedService<AssetIndexer>();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower);
@@ -40,6 +42,8 @@ Console.WriteLine($"OpenVerseBE: redis={options.Redis.Split(',')[0]} prefix={opt
                   $"cafe_key={(options.CafeKey.Length > 0 ? "on" : "off")} " +
                   $"max_rooms={(options.MaxRooms > 0 ? options.MaxRooms.ToString() : "unlimited")} " +
                   $"assets={(options.AssetDir.Length > 0 ? options.AssetDir : "off")} " +
+                  $"asset_rate={(options.AssetRateMbps > 0 ? options.AssetRateMbps + "Mbps" : "unlimited")} " +
+                  $"asset_max_active={(options.AssetMaxActive > 0 ? options.AssetMaxActive.ToString() : "unlimited")} " +
                   $"card_master={(options.CardMasterPath.Length > 0 && File.Exists(options.CardMasterPath) ? "on" : "off")} " +
                   $"trusted_proxies={(options.TrustedProxies.Length > 0 ? string.Join(",", options.TrustedProxies.Select(p => p.ToString())) : "loopback")}");
 app.Run();

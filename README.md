@@ -42,7 +42,8 @@
 | `GET /v1/assets/status` | | 게임 파일 색인 상태 `ready`·`indexing`·`not_configured` |
 | `GET /v1/assets/manifests` | | 서버가 가진 목록 파일 이름 |
 | `GET /v1/assets/manifests/{name}` | `/dl/.../{name}` (로컬 Api가 시작할 때) | 해시를 서버 파일 기준으로 고친 목록 파일 |
-| `GET /v1/assets/files/{md5}` | `/dl/.../{hash}` (내 PC에 없는 파일) | 파일 / 404 |
+| `GET /v1/assets/files/{md5}` | `/dl/.../{hash}` (내 PC에 없는 파일) | 파일 / 404 / 429 `queued` (`position`, `Retry-After`) |
+| `GET /v1/assets/queue` | | 지금 받는 사람 수, 대기 인원, 설정값 |
 
 `register`, `card-master`, `assets/*`는 `OVBE_CAFE_KEY`가 설정되어 있으면 `X-OV-Cafe-Key` 헤더가 같아야 합니다.
 `assets/*`는 색인이 끝나기 전에는 503 `assets_indexing`, 게임 파일 폴더가 없으면 404 `assets_not_configured`입니다.
@@ -137,6 +138,7 @@ cp /어딘가/card_master_full.csv.gz data/
 | `OPENVERSE_REF` | 배틀 서버를 빌드할 OpenVerse 브랜치 (기본 `main`) |
 | `OVBE_DATA_DIR` | 카드 마스터 폴더. 기본은 저장소의 `data/`. 자동 배포(CD)를 쓰면 저장소 밖으로 지정. 카드 마스터가 없는 플레이어에게도 이 파일을 내려줌 |
 | `OVBE_ASSET_DIR` | (선택) 셰도우버스 데이터 폴더 복사본. 데이터가 없는 플레이어에게 없는 파일을 내려줌. 아래 "게임 데이터·카드 마스터 내려주기" |
+| `OVBE_ASSET_RATE_MBPS`, `OVBE_ASSET_MAX_ACTIVE`, `OVBE_ASSET_IDLE_SECONDS` | 게임 파일 다운로드 대역폭·동시 인원·대기열. 같은 절 참고 |
 | `OVBE_PUBLIC_URL` | 도메인 하나를 WebUI 등과 같이 쓸 때만. 예: `https://example.iptime.org/openverse` |
 
 ### 3. HTTPS: 기존 nginx에 연결 (기본)
@@ -209,9 +211,19 @@ Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨�
    curl -s -H "X-OV-Cafe-Key: 카페키" http://127.0.0.1:5080/v1/assets/status
    ```
    `"state":"ready"`면 끝입니다. 계산 결과는 `be-state` 볼륨에 남아 다음 재시작부터는 바뀐 파일만 다시 계산합니다.
-4. **nginx 속도 제한**: [`deploy/nginx/openverse-assets-zones.conf`](deploy/nginx/openverse-assets-zones.conf)를 `/etc/nginx/conf.d/`에 복사하고, [`openverse-path.conf`](deploy/nginx/openverse-path.conf)의 `location /openverse/v1/assets/ { ... }` 블록을 `location /openverse/` 옆에 붙여 넣습니다. 그다음 `sudo nginx -t && sudo systemctl reload nginx`.
-   - 기본값은 연결당 1MB/s, 전체 동시 3개입니다. 게임 파일 다운로드가 최대 약 24Mbps만 쓰므로 업로드 36Mbps 회선에서도 대전과 WebUI가 느려지지 않습니다.
-   - 플레이어 한 명은 최대 2MB/s(OpenVerse가 동시에 2개까지만 요청)로 받으니 13GB 전체는 약 2시간이 걸립니다. 유선으로 바꾸고 업로드를 다시 재면 `limit_rate`와 `ov_assets_total`을 올리세요.
+4. **nginx**: [`deploy/nginx/openverse-assets-zones.conf`](deploy/nginx/openverse-assets-zones.conf)를 `/etc/nginx/conf.d/`에 복사하고, [`openverse-path.conf`](deploy/nginx/openverse-path.conf)의 `location /openverse/v1/assets/ { ... }` 블록을 `location /openverse/` 옆에 붙여 넣습니다. 그다음 `sudo nginx -t && sudo systemctl reload nginx`.
+5. **대역폭과 대기열** (`.env`, 바꾼 뒤 `be`만 다시 띄우면 적용):
+
+   | 변수 | 기본값 | 의미 |
+   | --- | --- | --- |
+   | `OVBE_ASSET_RATE_MBPS` | 64 | 게임 파일 다운로드에 쓰는 업로드 총량(Mbps). 받는 사람이 1명이면 전부, 2명이면 반씩. 0이면 제한 없음 |
+   | `OVBE_ASSET_MAX_ACTIVE` | 2 | 동시에 받을 수 있는 사람 수. 그 이상은 먼저 온 순서대로 대기. 0이면 대기열 없음 |
+   | `OVBE_ASSET_IDLE_SECONDS` | 120 | 받던 사람이 이 시간 동안 요청이 없으면 다음 사람에게 차례가 넘어감 |
+
+   - 기본값은 업로드 100Mbps 회선 기준입니다. 1명이면 13.3GB를 약 30분, 2명이면 각자 약 1시간에 받고, 3번째부터는 대기합니다. 대전·WebUI용으로 약 30Mbps가 남습니다.
+   - 기다리는 사람의 런처 창에는 `[assets] 다운로드 대기 중: 1번째` 같은 줄이 찍힙니다. 지금 상황은 `curl -s http://127.0.0.1:5080/v1/assets/queue`로 봅니다.
+   - 회선이 좋아지면 `OVBE_ASSET_RATE_MBPS`와 `OVBE_ASSET_MAX_ACTIVE`를 올리세요. 한 사람이 30분에 받으려면 사람당 약 64Mbps가 필요합니다.
+   - 목록 파일과 카드 마스터는 작아서 대기열·대역폭 제한을 받지 않습니다.
 
 ### 자동 배포 (CD)
 

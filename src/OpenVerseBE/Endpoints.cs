@@ -139,10 +139,46 @@ public static class Endpoints
                 ? Results.Bytes(bytes, "application/octet-stream")
                 : Results.NotFound(new ErrorResponse("manifest_not_found"))).AddEndpointFilter(RequireAssetsReady);
 
-        assets.MapGet("/files/{md5}", (string md5, AssetStore store) =>
-            md5.Length == 32 && md5.All(Uri.IsHexDigit) && store.FileFor(md5) is { } path
-                ? Results.File(path, "application/octet-stream", enableRangeProcessing: true)
-                : Results.NotFound(new ErrorResponse("file_not_found"))).AddEndpointFilter(RequireAssetsReady);
+        assets.MapGet("/files/{md5}", async (HttpContext ctx, string md5, AssetStore store, DownloadQueue queue,
+            DownloadRate rate, BeOptions options) =>
+        {
+            if (md5.Length != 32 || !md5.All(Uri.IsHexDigit) || store.FileFor(md5) is not { } path)
+                return Results.NotFound(new ErrorResponse("file_not_found"));
+
+            var who = ctx.Request.Headers["X-OV-Download-Id"].ToString() is { Length: > 0 and <= 64 } id ? "id:" + id : "ip:" + SourceIp(ctx);
+            var turn = queue.Enter(who);
+            if (!turn.Go)
+            {
+                ctx.Response.Headers.RetryAfter = "5";
+                return Results.Json(new QueuedResponse("queued", turn.Position, turn.Active, turn.Waiting,
+                    options.AssetMaxActive), statusCode: StatusCodes.Status429TooManyRequests);
+            }
+
+            await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, useAsync: true);
+            ctx.Response.ContentType = "application/octet-stream";
+            ctx.Response.ContentLength = file.Length;
+            var buffer = new byte[1 << 16];
+            var ct = ctx.RequestAborted;
+            int n;
+            while ((n = await file.ReadAsync(buffer, ct)) > 0)
+            {
+                var wait = rate.Reserve(n, DateTimeOffset.UtcNow);
+                if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
+                await ctx.Response.Body.WriteAsync(buffer.AsMemory(0, n), ct);
+                queue.Touch(who);
+            }
+            return Results.Empty;
+        }).AddEndpointFilter(RequireAssetsReady);
+
+        assets.MapGet("/queue", (DownloadQueue queue, BeOptions options) =>
+        {
+            var (active, waiting) = queue.Counts();
+            return Results.Ok(new
+            {
+                active, waiting, max_active = options.AssetMaxActive, rate_mbps = options.AssetRateMbps,
+                idle_seconds = (int)options.AssetIdle.TotalSeconds,
+            });
+        });
     }
 
     static async ValueTask<object?> RequireCafeKey(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)

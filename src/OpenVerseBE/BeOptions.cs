@@ -38,6 +38,18 @@ public sealed class BeOptions
     // Somewhere writable to keep the asset index between restarts. Empty means it is rebuilt on every start
     public string StateDir { get; init; } = "";
 
+    // Upload budget for game files, in Mbit/s, shared by everyone downloading at the moment (one player gets all of
+    // it, two get half each). 0 means no limit. 64 leaves ~30 of a 94 Mbit/s upload for battles and the rest of the
+    // host, and moves a 13.3 GB copy in about half an hour
+    public double AssetRateMbps { get; init; } = 64;
+
+    // How many players may download game files at once; the rest wait in line. 0 means no line
+    public int AssetMaxActive { get; init; } = 2;
+
+    // A downloading player who asks for nothing this long gives up their place; someone in line who stops asking
+    // drops out
+    public TimeSpan AssetIdle { get; init; } = TimeSpan.FromSeconds(120);
+
     public static BeOptions FromEnvironment() => From(Environment.GetEnvironmentVariable);
 
     // Separate from the process environment so the parsing can be tested without changing it under a running server
@@ -64,6 +76,21 @@ public sealed class BeOptions
             AssetDir = Env("OVBE_ASSET_DIR") ?? d.AssetDir,
             CardMasterPath = Env("OVBE_CARD_MASTER") ?? d.CardMasterPath,
             StateDir = Env("OVBE_STATE_DIR") ?? d.StateDir,
+            AssetRateMbps = Env("OVBE_ASSET_RATE_MBPS") is { } rate
+                ? double.TryParse(rate, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r) && r >= 0
+                    ? r
+                    : throw new InvalidOperationException($"OVBE_ASSET_RATE_MBPS must be a number >= 0 (0 = no limit), got '{rate}'")
+                : d.AssetRateMbps,
+            AssetMaxActive = Env("OVBE_ASSET_MAX_ACTIVE") is { } active
+                ? int.TryParse(active, out var a) && a >= 0
+                    ? a
+                    : throw new InvalidOperationException($"OVBE_ASSET_MAX_ACTIVE must be a whole number >= 0 (0 = no line), got '{active}'")
+                : d.AssetMaxActive,
+            AssetIdle = Env("OVBE_ASSET_IDLE_SECONDS") is { } idle
+                ? int.TryParse(idle, out var sec) && sec > 0
+                    ? TimeSpan.FromSeconds(sec)
+                    : throw new InvalidOperationException($"OVBE_ASSET_IDLE_SECONDS must be a whole number > 0, got '{idle}'")
+                : d.AssetIdle,
         };
     }
 }

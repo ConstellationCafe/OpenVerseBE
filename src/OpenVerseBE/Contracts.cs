@@ -42,3 +42,7 @@ public sealed record DeckRequest(
     string UserName);
 
 public sealed record ErrorResponse(string Error);
+
+// 429 for a game file while others hold every download place: where this player stands in line. Ask again after
+// Retry-After seconds; asking again is what keeps the place
+public sealed record QueuedResponse(string Error, int Position, int Active, int Waiting, int MaxActive);
