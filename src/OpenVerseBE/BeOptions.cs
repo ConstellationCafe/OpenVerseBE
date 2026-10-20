@@ -28,6 +28,16 @@ public sealed class BeOptions
 
     public TimeSpan TokenTtl { get; init; } = TimeSpan.FromDays(30);
 
+    // A copy of a player's Shadowverse data folder (manifest/, a/, b/, s/, v/, m/, f/), for players whose own copy is
+    // missing files. Empty means no game files are served
+    public string AssetDir { get; init; } = "";
+
+    // card_master_full.csv.gz, for players with no card master of their own. Empty or missing means none is served
+    public string CardMasterPath { get; init; } = "";
+
+    // Somewhere writable to keep the asset index between restarts. Empty means it is rebuilt on every start
+    public string StateDir { get; init; } = "";
+
     public static BeOptions FromEnvironment() => From(Environment.GetEnvironmentVariable);
 
     // Separate from the process environment so the parsing can be tested without changing it under a running server
@@ -51,6 +61,9 @@ public sealed class BeOptions
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(System.Net.IPAddress.Parse)
                 .ToArray(),
+            AssetDir = Env("OVBE_ASSET_DIR") ?? d.AssetDir,
+            CardMasterPath = Env("OVBE_CARD_MASTER") ?? d.CardMasterPath,
+            StateDir = Env("OVBE_STATE_DIR") ?? d.StateDir,
         };
     }
 }

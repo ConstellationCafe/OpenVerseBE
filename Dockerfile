@@ -11,5 +11,7 @@ COPY --from=build /out .
 # only Caddy talks to this, over the compose network
 ENV ASPNETCORE_URLS=http://0.0.0.0:5080
 EXPOSE 5080
+# the asset index survives restarts here (a named volume, which takes this ownership on first use)
+RUN mkdir -p /app/state && chown "$APP_UID" /app/state
 USER $APP_UID
 ENTRYPOINT ["dotnet", "OpenVerseBE.dll"]
