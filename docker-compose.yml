@@ -96,6 +96,9 @@ services:
       OPENVERSE_REDIS: *redis-conn
       OPENVERSE_REDIS_PREFIX: "ov:"
       OPENVERSE_ENGINE_ROLE: ${OPENVERSE_ENGINE_ROLE:-AnswerBlanks}
+      # engine debugging: 1 writes every Unity call the shim has no implementation for (once each) and the Unity
+      # log to the battle log
+      OPENVERSE_SHIM_VERBOSE: ${OVBE_SHIM_VERBOSE:-0}
     volumes:
       # card_master_full.csv.gz from a player's server/data folder. OVBE_DATA_DIR moves it out of the checkout
       # (CD replaces the checkout on every deploy)

@@ -231,6 +231,7 @@ Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨�
 
 - 엔진 파일은 Cygames·Unity 저작물에서 만든 것이라 **어떤 레포에도 올리지 않습니다.** 서버 폴더에만 둡니다.
 - `.env`에 `OVBE_ENGINE_DIR=/home/elaina/dockers/OpenVerseBE/engine`처럼 폴더를 지정하고 배틀 서버를 다시 빌드합니다(Actions → OpenVerseBE_CD → Run workflow에서 `battle` 체크, 또는 `docker compose --env-file ../.env build battle && docker compose --env-file ../.env up -d --no-deps --force-recreate battle`).
+- 엔진이 대전을 못 따라갈 때(`not applied` 로그)는 `.env`에 `OVBE_SHIM_VERBOSE=1`을 넣고 `docker compose --env-file ../.env up -d --no-deps --force-recreate battle`(재빌드 불필요)로 다시 띄우면, shim이 구현 없이 넘긴 Unity 호출(`[shim] default ...`)과 Unity 로그가 배틀 로그에 남습니다. 확인 후 0으로 되돌립니다.
 - 켜졌는지: `docker compose --env-file ../.env logs battle | grep Engine:` → `Engine: ready in ...ms, role=AnswerBlanks`
 - 지정하지 않으면 빈 폴더(`deploy/engine-none`)가 쓰여 지금처럼 중계만 합니다.
 
