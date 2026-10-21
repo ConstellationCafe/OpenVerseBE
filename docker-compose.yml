@@ -81,6 +81,12 @@ services:
       # the battle server lives in the OpenVerse repository
       context: ${OPENVERSE_GIT:-https://github.com/ConstellationCafe/OpenVerse.git}#${OPENVERSE_REF:-main}
       dockerfile: src/OpenVerse.Battle/Dockerfile
+      # the battle engine (client DLLs + headless Unity shim) is never in a repository. A host that has built it
+      # points OVBE_ENGINE_DIR at the folder; without it this is an empty folder and the server relays only
+      args:
+        ENGINE: engine
+      additional_contexts:
+        engine: ${OVBE_ENGINE_DIR:-./deploy/engine-none}
     image: openverse-battle:local
     restart: unless-stopped
     depends_on:

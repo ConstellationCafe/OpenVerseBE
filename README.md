@@ -225,6 +225,15 @@ Docker 데몬 설정에서 `"userland-proxy"`나 `"iptables": false`를 바꿨�
    - 회선이 좋아지면 `OVBE_ASSET_RATE_MBPS`와 `OVBE_ASSET_MAX_ACTIVE`를 올리세요. 한 사람이 30분에 받으려면 사람당 약 64Mbps가 필요합니다.
    - 목록 파일과 카드 마스터는 작아서 대기열·대역폭 제한을 받지 않습니다.
 
+### 배틀 엔진 (선택)
+
+배틀 서버는 기본으로 메시지를 **중계만** 해서, 공식 서버가 채워 주던 값(비용, 효과 조건의 답)이 빠지고 대전이 어긋날 수 있습니다(`ConductError`). 엔진(클라이언트 DLL + 헤드리스 Unity shim)이 있으면 배틀 서버가 대전을 서버 안에서 재현해 그 값을 채웁니다.
+
+- 엔진 파일은 Cygames·Unity 저작물에서 만든 것이라 **어떤 레포에도 올리지 않습니다.** 서버 폴더에만 둡니다.
+- `.env`에 `OVBE_ENGINE_DIR=/home/elaina/dockers/OpenVerseBE/engine`처럼 폴더를 지정하고 배틀 서버를 다시 빌드합니다(Actions → OpenVerseBE_CD → Run workflow에서 `battle` 체크, 또는 `docker compose --env-file ../.env build battle && docker compose --env-file ../.env up -d --no-deps --force-recreate battle`).
+- 켜졌는지: `docker compose --env-file ../.env logs battle | grep Engine:` → `Engine: ready in ...ms, role=AnswerBlanks`
+- 지정하지 않으면 빈 폴더(`deploy/engine-none`)가 쓰여 지금처럼 중계만 합니다.
+
 ### 자동 배포 (CD)
 
 main에 push(PR 머지)되면 [`.github/workflows/CD.yml`](.github/workflows/CD.yml)이 서버에 배포합니다. WebUI_BE와 같은 방식입니다.
